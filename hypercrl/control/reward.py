@@ -48,7 +48,6 @@ except Exception:
         return mat[0] if is_vector else mat
 
     def quat2euler(quat):
-        quat_is_vector = np.asarray(quat).ndim == 1
         mat = _quat2mat(quat)
         mat = np.asarray(mat, dtype=np.float64)
         is_matrix = mat.ndim == 2
@@ -63,7 +62,7 @@ except Exception:
         out[:, 0] = np.where(condition, -np.arctan2(mat[:, 1, 2], mat[:, 2, 2]), 0.0)
         if is_matrix:
             out = out[0]
-        return out if not quat_is_vector else np.asarray(out).reshape(-1, 3)[0]
+        return out
 
 class GTCost():
     def __init__(self, clenv_name, state_dim, control_dim, reward_discount, gpuid):
