@@ -3,8 +3,6 @@ import numpy as np
 try:
     from gym.envs.robotics.rotations import quat2euler, quat_mul
 except Exception:
-    from scipy.spatial.transform import Rotation as R
-
     def _ensure_2d_quat(quat):
         quat = np.asarray(quat)
         is_vector = quat.ndim == 1
@@ -25,11 +23,47 @@ except Exception:
         ], axis=1)
         return out[0] if q0_is_vector else out
 
-    def quat2euler(quat):
+    _FLOAT_EPS = np.finfo(np.float64).eps
+    _EPS4 = _FLOAT_EPS * 4.0
+
+    def _quat2mat(quat):
         quat, is_vector = _ensure_2d_quat(quat)
-        quat_xyzw = np.concatenate([quat[:, 1:4], quat[:, 0:1]], axis=1)
-        out = R.from_quat(quat_xyzw).as_euler("xyz")
-        return out[0] if is_vector else out
+        w, x, y, z = quat[:, 0], quat[:, 1], quat[:, 2], quat[:, 3]
+        Nq = np.sum(quat * quat, axis=1)
+        s = np.where(Nq > _FLOAT_EPS, 2.0 / Nq, 0.0)
+        X, Y, Z = x * s, y * s, z * s
+        wX, wY, wZ = w * X, w * Y, w * Z
+        xX, xY, xZ = x * X, x * Y, x * Z
+        yY, yZ, zZ = y * Y, y * Z, z * Z
+        mat = np.empty((quat.shape[0], 3, 3), dtype=np.float64)
+        mat[:, 0, 0] = 1.0 - (yY + zZ)
+        mat[:, 0, 1] = xY - wZ
+        mat[:, 0, 2] = xZ + wY
+        mat[:, 1, 0] = xY + wZ
+        mat[:, 1, 1] = 1.0 - (xX + zZ)
+        mat[:, 1, 2] = yZ - wX
+        mat[:, 2, 0] = xZ - wY
+        mat[:, 2, 1] = yZ + wX
+        mat[:, 2, 2] = 1.0 - (xX + yY)
+        return mat[0] if is_vector else mat
+
+    def quat2euler(quat):
+        quat_is_vector = np.asarray(quat).ndim == 1
+        mat = _quat2mat(quat)
+        mat = np.asarray(mat, dtype=np.float64)
+        is_matrix = mat.ndim == 2
+        if is_matrix:
+            mat = mat.reshape(1, 3, 3)
+        cy = np.sqrt(mat[:, 2, 2] * mat[:, 2, 2] + mat[:, 1, 2] * mat[:, 1, 2])
+        condition = cy > _EPS4
+        out = np.empty((mat.shape[0], 3), dtype=np.float64)
+        out[:, 2] = np.where(condition, -np.arctan2(mat[:, 0, 1], mat[:, 0, 0]),
+                             -np.arctan2(-mat[:, 1, 0], mat[:, 1, 1]))
+        out[:, 1] = -np.arctan2(-mat[:, 0, 2], cy)
+        out[:, 0] = np.where(condition, -np.arctan2(mat[:, 1, 2], mat[:, 2, 2]), 0.0)
+        if is_matrix:
+            out = out[0]
+        return out if not quat_is_vector else np.asarray(out).reshape(-1, 3)[0]
 
 class GTCost():
     def __init__(self, clenv_name, state_dim, control_dim, reward_discount, gpuid):

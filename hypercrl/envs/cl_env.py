@@ -194,6 +194,7 @@ class CLEnvHandler():
             from .mujoco.modified_invertedpendulum import InvertedPendulumBin
             env = TimeLimit(InvertedPendulumBin(INVERTED_PENDULUM_BIN_ENVS[task_id]), 1000)
         elif self.cl_env == "cartpole_bin":
+            from .cartpole import CartpoleBinEnv
             env = gym.make(CARTPOLE_BIN_ENVS[task_id])
         elif self.cl_env == "cartpole":
             env = gym.make(CARTPOLE_ENVS[task_id])
