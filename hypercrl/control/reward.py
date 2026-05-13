@@ -5,22 +5,31 @@ try:
 except Exception:
     from scipy.spatial.transform import Rotation as R
 
+    def _ensure_2d_quat(quat):
+        quat = np.asarray(quat)
+        is_vector = quat.ndim == 1
+        if is_vector:
+            quat = quat.reshape(1, 4)
+        return quat, is_vector
+
     def quat_mul(q0, q1):
-        q0 = np.asarray(q0)
-        q1 = np.asarray(q1)
+        q0, q0_is_vector = _ensure_2d_quat(q0)
+        q1, _ = _ensure_2d_quat(q1)
         w0, x0, y0, z0 = q0[:, 0], q0[:, 1], q0[:, 2], q0[:, 3]
         w1, x1, y1, z1 = q1[:, 0], q1[:, 1], q1[:, 2], q1[:, 3]
-        return np.stack([
+        out = np.stack([
             w0 * w1 - x0 * x1 - y0 * y1 - z0 * z1,
             w0 * x1 + x0 * w1 + y0 * z1 - z0 * y1,
             w0 * y1 - x0 * z1 + y0 * w1 + z0 * x1,
             w0 * z1 + x0 * y1 - y0 * x1 + z0 * w1,
         ], axis=1)
+        return out[0] if q0_is_vector else out
 
     def quat2euler(quat):
-        quat = np.asarray(quat)
+        quat, is_vector = _ensure_2d_quat(quat)
         quat_xyzw = np.concatenate([quat[:, 1:4], quat[:, 0:1]], axis=1)
-        return R.from_quat(quat_xyzw).as_euler("xyz")
+        out = R.from_quat(quat_xyzw).as_euler("xyz")
+        return out[0] if is_vector else out
 
 class GTCost():
     def __init__(self, clenv_name, state_dim, control_dim, reward_discount, gpuid):
