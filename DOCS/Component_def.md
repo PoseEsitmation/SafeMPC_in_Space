@@ -1,3 +1,7 @@
+# Component Def 
+
+link to the graph: 
+[https://www.figma.com/board/ZT3W5ffSM1kQXYwgdJTx4Q/Safety-Aware-HyperCRL-—-Implementation-Map?node-id=0-1&p=f&t=m6Esj7VUUtCnj1mH-0](https://www.figma.com/board/ZT3W5ffSM1kQXYwgdJTx4Q/Safety-Aware-HyperCRL-—-Implementation-Map?node-id=0-1&p=f&t=m6Esj7VUUtCnj1mH-0)
 
 ## Existing HyperCRL components
 
