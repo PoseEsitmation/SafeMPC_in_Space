@@ -4,6 +4,7 @@ try:
     from gym.envs.robotics.rotations import quat2euler, quat_mul
 except Exception:
     def _ensure_2d_quat(quat):
+        """Normalize quaternion input to shape (N, 4); return (array, was_1d)."""
         quat = np.asarray(quat)
         is_vector = quat.ndim == 1
         if is_vector:
@@ -11,6 +12,7 @@ except Exception:
         return quat, is_vector
 
     def quat_mul(q0, q1):
+        """Multiply quaternions in [w, x, y, z] format, supporting 1D or batched input."""
         q0, q0_is_vector = _ensure_2d_quat(q0)
         q1, _ = _ensure_2d_quat(q1)
         w0, x0, y0, z0 = q0[:, 0], q0[:, 1], q0[:, 2], q0[:, 3]
@@ -27,6 +29,7 @@ except Exception:
     _EPS4 = _FLOAT_EPS * 4.0
 
     def _quat2mat(quat):
+        """Convert [w, x, y, z] quaternion(s) to rotation matrix/matrices."""
         quat, is_vector = _ensure_2d_quat(quat)
         w, x, y, z = quat[:, 0], quat[:, 1], quat[:, 2], quat[:, 3]
         Nq = np.sum(quat * quat, axis=1)
@@ -48,8 +51,8 @@ except Exception:
         return mat[0] if is_vector else mat
 
     def quat2euler(quat):
+        """Convert [w, x, y, z] quaternion(s) to xyz Euler angles."""
         mat = _quat2mat(quat)
-        mat = np.asarray(mat, dtype=np.float64)
         is_matrix = mat.ndim == 2
         if is_matrix:
             mat = mat.reshape(1, 3, 3)
