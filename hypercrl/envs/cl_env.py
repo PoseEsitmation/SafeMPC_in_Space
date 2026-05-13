@@ -5,14 +5,19 @@ from scipy.spatial.transform import Rotation as R
 from gym.wrappers import TimeLimit
 
 # robosuite
-import robosuite as suite
-from robosuite.controllers import load_controller_config
-from robosuite.wrappers import GymWrapper
+try:
+    import robosuite as suite
+    from robosuite.controllers import load_controller_config
+    from robosuite.wrappers import GymWrapper
+    _ROBOSUITE_IMPORT_ERROR = None
+except Exception as err:
+    suite = None
+    load_controller_config = None
+    GymWrapper = None
+    _ROBOSUITE_IMPORT_ERROR = err
 
 # Custom Env
 from .lqr import LQR_2DCar, LQR_HARD
-from .mujoco.modified_invertedpendulum import InvertedPendulumBin
-from .cartpole import CartpoleBinEnv
 
 Rots = [[0, 0, 0], [0, 10, 0], [0, 20, 0], [0, 30, 0],
         [-10, -10, 0], [-10, -20, 0], [-10, 30, 0],
@@ -126,6 +131,11 @@ class CLEnvHandler():
         self._env_mt_world = None
 
     def add_task(self, task_id, render=False, replica=False):
+        if self.cl_env in {"pusher", "pusher_rot", "pusher_slide", "door", "door_pose"} and suite is None:
+            raise ImportError(
+                "robosuite-based environments require robosuite + mujoco-py. "
+                "On Python 3.12, use non-robosuite environments or a Python version that supports mujoco-py."
+            ) from _ROBOSUITE_IMPORT_ERROR
         
         # Meta world environemnt has its own wrapper
         if self.cl_env.startswith("metaworld"):
@@ -181,6 +191,7 @@ class CLEnvHandler():
             env.model.opt.gravity[:] = g
             print(env.model.opt.gravity)
         elif self.cl_env == "inverted_pendulum_bin":
+            from .mujoco.modified_invertedpendulum import InvertedPendulumBin
             env = TimeLimit(InvertedPendulumBin(INVERTED_PENDULUM_BIN_ENVS[task_id]), 1000)
         elif self.cl_env == "cartpole_bin":
             env = gym.make(CARTPOLE_BIN_ENVS[task_id])

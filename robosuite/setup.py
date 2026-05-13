@@ -17,8 +17,9 @@ setup(
     ],
     install_requires=[
         "numpy>=1.13.3",
-        "numba>=0.49.1",
-        "mujoco-py==2.0.2.9",
+        "numba>=0.60.0",
+        "mujoco-py==2.1.2.14; python_version < '3.12'",
+        "mujoco>=3.2.3; python_version >= '3.12'",
     ],
     eager_resources=['*'],
     include_package_data=True,

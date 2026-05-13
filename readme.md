@@ -67,7 +67,7 @@ We recommend using a virtualenv to install all the dependencies.
 
 From an Ubuntu 18.04 machine, run the following:
 ```
-virtualenv -p /usr/bin/python3.6 venv
+virtualenv -p /usr/bin/python3.12 venv
 source venv/bin/activate
 pip install -r requirements.txt
 cd robosuite && pip install -e .

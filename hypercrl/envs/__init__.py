@@ -1,6 +1,9 @@
 from gym.envs.registration import register
 from .lqr import LQR_2DCar, LQR_HARD
-from .mujoco import *
+try:
+    from .mujoco import *
+except Exception:
+    pass
 import os
 
 register(
