@@ -9,7 +9,6 @@ import random
 import os
 from gym import utils
 from gym.envs.mujoco import mujoco_env
-import mujoco_py
 import six
 
 def ModifiedMassEnvFactory(class_type):
@@ -63,6 +62,7 @@ def ModifiedSizeEnvFactory(class_type):
                 model_path,
                 body_parts=["torso"],
                 size_scale=1.0,
+                render_mode=None,
                 *args,
                 **kwargs):
 
@@ -95,7 +95,7 @@ def ModifiedSizeEnvFactory(class_type):
             tree.write(file_path)
 
             # load the modified xml
-            class_type.__init__(self, model_path=file_path)
+            class_type.__init__(self, model_path=file_path, render_mode=render_mode)
             utils.EzPickle.__init__(self)
 
 

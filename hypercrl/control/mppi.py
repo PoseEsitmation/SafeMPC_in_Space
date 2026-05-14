@@ -56,7 +56,7 @@ class MPPI():
         self.dtype = noise_sigma.dtype
         self.K = num_samples  # N_SAMPLES
         self.T = horizon  # TIMESTEPS
-        self.num_iter = num_iter # num iterations
+        self.num_iter = num_iter  # num iterations
 
         # dimensions of state and control
         self.nx = nx
@@ -89,7 +89,8 @@ class MPPI():
         self.noise_mu = noise_mu.to(self.d)
         self.noise_sigma = noise_sigma.to(self.d)
         self.noise_sigma_inv = torch.inverse(self.noise_sigma)
-        self.noise_dist = MultivariateNormal(self.noise_mu, covariance_matrix=self.noise_sigma)
+        self.noise_dist = MultivariateNormal(
+            self.noise_mu, covariance_matrix=self.noise_sigma)
         # T x nu control sequence
         self.U = U_init
         self.u_init = u_init.to(self.d)
@@ -113,7 +114,8 @@ class MPPI():
         self.states = None
         self.actions = None
         if self.dynamics_variance is not None and self.running_cost_variance is None:
-            raise RuntimeError("Need to give running cost for variance when giving the dynamics variance")
+            raise RuntimeError(
+                "Need to give running cost for variance when giving the dynamics variance")
 
     def _dynamics(self, state, u, t, task_id):
         return self.F(state, u, t, task_id) if self.step_dependency else self.F(state, u, task_id)
@@ -135,12 +137,14 @@ class MPPI():
             cost_total = self._compute_total_cost_batch(task_id)
 
             beta = torch.min(cost_total)
-            self.cost_total_non_zero = _ensure_non_zero(cost_total, beta, 1 / self.lambda_)
+            self.cost_total_non_zero = _ensure_non_zero(
+                cost_total, beta, 1 / self.lambda_)
 
             eta = torch.sum(self.cost_total_non_zero)
             self.omega = (1. / eta) * self.cost_total_non_zero
             for t in range(self.T):
-                self.U[t] += torch.sum(self.omega.view(-1, 1) * self.noise[:, t], dim=0)
+                self.U[t] += torch.sum(self.omega.view(-1, 1)
+                                       * self.noise[:, t], dim=0)
 
         if first_action:
             action = self.U[0]
@@ -183,7 +187,8 @@ class MPPI():
             state = self._dynamics(state, u, t, task_id)
             self.cost_total += self.running_cost(state, u, t, task_id)
             if self.dynamics_variance is not None:
-                self.cost_total += self.running_cost_variance(self.dynamics_variance(state))
+                self.cost_total += self.running_cost_variance(
+                    self.dynamics_variance(state))
 
             # Save total states/actions
             self.states.append(state)
@@ -195,9 +200,11 @@ class MPPI():
         self.states = torch.stack(self.states, dim=1)
 
         # action perturbation cost
-        perturbation_cost = torch.sum(self.perturbed_action * action_cost, dim=(1, 2))
+        perturbation_cost = torch.sum(
+            self.perturbed_action * action_cost, dim=(1, 2))
         if self.terminal_state_cost:
-            self.cost_total += self.terminal_state_cost(self.states, self.actions)
+            self.cost_total += self.terminal_state_cost(
+                self.states, self.actions)
         self.cost_total += perturbation_cost
         return self.cost_total
 
@@ -224,24 +231,28 @@ class MPPI():
             state = state.repeat(num_rollouts, 1)
 
         T = self.U.shape[0]
-        states = torch.zeros((num_rollouts, T + 1, self.nx), dtype=self.U.dtype, device=self.U.device)
+        states = torch.zeros((num_rollouts, T + 1, self.nx),
+                             dtype=self.U.dtype, device=self.U.device)
         states[:, 0] = state
         for t in range(T):
-            states[:, t + 1] = self._dynamics(states[:, t].view(num_rollouts, -1), self.U[t].view(num_rollouts, -1), t, task_id)
+            states[:, t + 1] = self._dynamics(states[:, t].view(
+                num_rollouts, -1), self.U[t].view(num_rollouts, -1), t, task_id)
         return states[:, 1:]
 
 
 def run_mppi(mppi, env, retrain_dynamics, retrain_after_iter=50, iter=1000, render=True):
-    dataset = torch.zeros((retrain_after_iter, mppi.nx + mppi.nu), dtype=mppi.U.dtype, device=mppi.d)
+    dataset = torch.zeros(
+        (retrain_after_iter, mppi.nx + mppi.nu), dtype=mppi.U.dtype, device=mppi.d)
     total_reward = 0
     for i in range(iter):
         state = env.state.copy()
         command_start = time.perf_counter()
         action = mppi.command(state)
         elapsed = time.perf_counter() - command_start
-        s, r, _, _ = env.step(action.cpu().numpy())
+        s, r, _, _, _ = env.step(action.cpu().numpy())
         total_reward += r
-        logger.debug("action taken: %.4f cost received: %.4f time taken: %.5fs", action, -r, elapsed)
+        logger.debug(
+            "action taken: %.4f cost received: %.4f time taken: %.5fs", action, -r, elapsed)
         if render:
             env.render()
 
@@ -254,16 +265,18 @@ def run_mppi(mppi, env, retrain_dynamics, retrain_after_iter=50, iter=1000, rend
         dataset[di, mppi.nx:] = action
     return total_reward, dataset
 
+
 class PDDM():
     """
     Based on https://github.com/google-research/pddm
     Deep Dynamics Model for Learning Dexterous Manipulation
     """
-    def __init__(self, dynamics, cost, nx, na, horizon, num_samples, beta, 
-                kappa, mag_noise, gpuid):
+
+    def __init__(self, dynamics, cost, nx, na, horizon, num_samples, beta,
+                 kappa, mag_noise, gpuid):
 
         ###########
-        ## params
+        # params
         ###########
         self.horizon = horizon
         self.N = num_samples
@@ -272,41 +285,43 @@ class PDDM():
         self.gpuid = gpuid
 
         #############
-        ## init mppi vars
+        # init mppi vars
         #############
         self.x_dim = nx
         self.ac_dim = na
         self.mppi_kappa = kappa
         self.sigma = mag_noise * torch.ones(self.ac_dim).to(gpuid)
         self.beta = beta
-        self.mppi_mean = torch.zeros(self.horizon, self.ac_dim, device=gpuid)  #start mean at 0
+        self.mppi_mean = torch.zeros(
+            self.horizon, self.ac_dim, device=gpuid)  # start mean at 0
 
     ###################################################################
     ###################################################################
-    #### update action mean using weighted average of the actions (by their resulting scores)
+    # update action mean using weighted average of the actions (by their resulting scores)
     ###################################################################
     ###################################################################
 
     def reset(self):
-        self.mppi_mean = torch.zeros(self.horizon, self.ac_dim, device=self.gpuid)  #start mean at 0
+        self.mppi_mean = torch.zeros(
+            self.horizon, self.ac_dim, device=self.gpuid)  # start mean at 0
 
     def mppi_update(self, costs, all_samples):
 
         #########################
-        ## how each sim's score compares to the best score
+        # how each sim's score compares to the best score
         ##########################
         S = torch.exp(-self.mppi_kappa * (costs - torch.min(costs)))  # [N,]
         denom = torch.sum(S) + 1e-10
 
         ##########################
-        ## weight all actions of the sequence by that sequence's resulting reward
+        # weight all actions of the sequence by that sequence's resulting reward
         ##########################
         S_shaped = S.unsqueeze_(1).unsqueeze_(2)
-        weighted_actions = (all_samples * S)  #[N x H x acDim]
+        weighted_actions = (all_samples * S)  # [N x H x acDim]
         self.mppi_mean = torch.sum(weighted_actions, 0) / denom
 
         ##########################
-        ## return 1st element of the mean, which corresps to curr timestep
+        # return 1st element of the mean, which corresps to curr timestep
         ##########################
         return self.mppi_mean
 
@@ -324,31 +339,35 @@ class PDDM():
         self.mppi_mean[:-1] = self.mppi_mean[1:].clone()
 
         ##############################################
-        ## sample candidate action sequences
-        ## by creating smooth filtered trajecs (noised around a mean)
+        # sample candidate action sequences
+        # by creating smooth filtered trajecs (noised around a mean)
         ##############################################
 
-        #np.random.seed()  # to get different action samples for each rollout
+        # np.random.seed()  # to get different action samples for each rollout
 
-        eps = torch.randn((self.N, self.horizon, self.ac_dim), device=self.gpuid) * self.sigma
+        eps = torch.randn((self.N, self.horizon, self.ac_dim),
+                          device=self.gpuid) * self.sigma
 
         # actions = mean + noise... then smooth the actions temporally
         all_samples = eps.clone()
         for i in range(self.horizon):
-            if(i==0):
-                all_samples[:, i, :] = self.beta*(self.mppi_mean[i, :] + eps[:, i, :]) + (1-self.beta)*past_action
+            if (i == 0):
+                all_samples[:, i, :] = self.beta * \
+                    (self.mppi_mean[i, :] + eps[:, i, :]) + \
+                    (1-self.beta)*past_action
             else:
-                all_samples[:, i, :] = self.beta*(self.mppi_mean[i, :] + eps[:, i, :]) + (1-self.beta)*all_samples[:, i-1, :]
+                all_samples[:, i, :] = self.beta*(self.mppi_mean[i, :] + eps[:, i, :]) + (
+                    1-self.beta)*all_samples[:, i-1, :]
 
         #################################################
-        ### Get result of executing those candidate action sequences
+        # Get result of executing those candidate action sequences
         #################################################
         self.states = []
         cost_total = torch.zeros(self.N, device=self.gpuid)
         for i in range(self.horizon):
             u = all_samples[:, i, :]
             state = self._dynamics(state, u, task_id)
-            
+
             self.states.append(state)
             cost = self.cost_func(state, u, i, task_id)
             cost_total += cost
@@ -356,7 +375,7 @@ class PDDM():
         # uses all paths to update action mean (for horizon steps)
         # Note: mppi_update needs rewards, so pass in -costs
         selected_action = self.mppi_update(cost_total, all_samples)
-        
+
         if first_action:
             return selected_action[0]
         else:
