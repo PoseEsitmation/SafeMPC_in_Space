@@ -21,19 +21,22 @@ class ModifiedHalfCheetahEnv(HalfCheetahEnv, utils.EzPickle):
     """
     Simply allows changing of XML file, probably not necessary if we pull request the xml name as a kwarg in openai gym
     """
-    def __init__(self, **kwargs):
-        mujoco_env.MujocoEnv.__init__(self, kwargs["model_path"], 5)
+    def __init__(self, render_mode=None, **kwargs):
+        self.xposbefore = None
+        observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(18,), dtype=np.float64)
         utils.EzPickle.__init__(self)
+        mujoco_env.MujocoEnv.__init__(self, kwargs["model_path"], 5, observation_space, render_mode=render_mode)
 
 class HalfCheetahWithSensorEnv(HalfCheetahEnv, utils.EzPickle):
     """
     Adds empty sensor readouts, this is to be used when transfering to WallEnvs where we get sensor readouts with distances to the wall
     """
 
-    def __init__(self, n_bins=10, **kwargs):
+    def __init__(self, n_bins=10, render_mode=None, **kwargs):
         self.n_bins = n_bins
-        mujoco_env.MujocoEnv.__init__(self, kwargs["model_path"], 5)
+        observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(18 + n_bins,), dtype=np.float64)
         utils.EzPickle.__init__(self)
+        mujoco_env.MujocoEnv.__init__(self, kwargs["model_path"], 5, observation_space, render_mode=render_mode)
 
 
     def _get_obs(self):

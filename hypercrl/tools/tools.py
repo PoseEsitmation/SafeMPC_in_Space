@@ -22,6 +22,7 @@ from hypercrl import dataset
 from hypercrl import dataset
 from hypercrl.envs.cl_env import CLEnvHandler, EnvSpecs
 
+
 def reset_seed(seed):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
@@ -30,11 +31,14 @@ def reset_seed(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+
 def np2torch(vec):
     return torch.FloatTensor(vec)
 
+
 def torch2np(vec):
     return vec.detach().cpu().numpy()
+
 
 def str_to_act(act_str):
     """Convert the name of an activation function into the actual PyTorch
@@ -59,12 +63,14 @@ def str_to_act(act_str):
         raise Exception('Activation function %s unknown.' % act_str)
     return act
 
+
 def isfloat(element):
     try:
         float(element)
         return True
     except ValueError:
         return False
+
 
 def read_hparams(folder, file):
     names = []
@@ -103,6 +109,7 @@ def read_hparams(folder, file):
     hp = Hparams(*values)
     return hp
 
+
 class MonitorBase():
     def __init__(self, hparams, model, collector, btest):
         self.eval_every = hparams.eval_every
@@ -118,7 +125,8 @@ class MonitorBase():
         self.hparams = hparams
         self.collector = collector
         self.btest = btest
-        self.tflog_dir = os.path.join(hparams.save_folder, f'TB{hparams.env}_{hparams.model}_{hparams.seed}')
+        self.tflog_dir = os.path.join(
+            hparams.save_folder, f'TB{hparams.env}_{hparams.model}_{hparams.seed}')
         self.writer = SummaryWriter(log_dir=self.tflog_dir)
 
         self.val_stats = []
@@ -148,9 +156,11 @@ class MonitorBase():
         self.train_loss += loss.data
         if (self.train_iter % self.print_train_every == 0):
             self.train_loss /= self.print_train_every
-            self.writer.add_scalar('train/mse_loss', self.train_loss, self.train_iter)
+            self.writer.add_scalar(
+                'train/mse_loss', self.train_loss, self.train_iter)
 
-            print(f"Batch: {self.train_iter}, Loss: {self.train_loss.item():.5f}")
+            print(
+                f"Batch: {self.train_iter}, Loss: {self.train_loss.item():.5f}")
             self.train_loss = 0
 
         if (self.train_iter % self.log_hist_every == 0):
@@ -158,12 +168,13 @@ class MonitorBase():
             for name, param in self.model.named_parameters():
                 if name in self.net_param_ckpt:
                     param = param.detach().cpu()
-                    diff += torch.norm(param - self.net_param_ckpt[name], p = 2)
+                    diff += torch.norm(param - self.net_param_ckpt[name], p=2)
 
-                self.writer.add_histogram(f'train/weight/{name}', param.flatten(), self.train_iter)
+                self.writer.add_histogram(
+                    f'train/weight/{name}', param.flatten(), self.train_iter)
 
             self.writer.add_scalar('train/regularizer', diff, self.train_iter)
-        
+
         self.train_iter += 1
 
     def log_weight(self):
@@ -184,14 +195,15 @@ class MonitorBase():
                     continue
                 if len(self.val_stats) <= i:
                     self.val_stats.append({"time": [],
-                        "nll": [], "diff": []})
+                                           "nll": [], "diff": []})
                 _, val_sets = self.collector.get_dataset(i)
-                loader = DataLoader(val_sets, batch_size = bs,
-                    num_workers=self.hparams.num_ds_worker)
+                loader = DataLoader(val_sets, batch_size=bs,
+                                    num_workers=self.hparams.num_ds_worker)
 
                 # Determine if we are validating the currently training task
-                val_nll, val_diff = self.validate_task(i, loader, mll, is_training)
-                
+                val_nll, val_diff = self.validate_task(
+                    i, loader, mll, is_training)
+
                 self.val_stats[i]['time'].append(self.train_iter)
                 self.val_stats[i]['nll'].append(val_nll.item())
                 self.val_stats[i]['diff'].append(val_diff.mean().item())
@@ -231,7 +243,7 @@ class MonitorBase():
             val_loss = val_loss / N
             val_diff = val_diff / N
 
-        print(f"Iter {self.train_iter}, Task: {task_id}, " + \
+        print(f"Iter {self.train_iter}, Task: {task_id}, " +
               f"Val Loss: {val_loss.item():.5f}, Val Diff: {val_diff.mean().item()}")
 
         return val_loss, val_diff
@@ -272,12 +284,13 @@ class MonitorBase():
             writer = csv.DictWriter(f, fieldnames=fieldnames)
 
             writer.writeheader()
-            
+
             for task_id, stats in enumerate(self.val_stats):
                 diff = stats['diff']
                 time = stats['time']
-                rows = [{'task': task_id, 'time': t, 'diff': d} for (t, d) in zip(time, diff)]
-                
+                rows = [{'task': task_id, 'time': t, 'diff': d}
+                        for (t, d) in zip(time, diff)]
+
                 writer.writerows(rows)
 
 
@@ -290,7 +303,8 @@ class MonitorRL(MonitorBase):
         self.env_iter = 0
         self.eval_env_run_every = hparams.eval_env_run_every
         self.run_eval_env_eps = hparams.run_eval_env_eps
-        self.rl_stats = [{"step": [], "reward": [], "time": [], "diff": []} for _ in range(self.num_envs)]
+        self.rl_stats = [{"step": [], "reward": [], "time": [],
+                          "diff": []} for _ in range(self.num_envs)]
         self.rewards = []
 
         self.eval_envs = CLEnvHandler(hparams.env, hparams.seed)
@@ -303,14 +317,17 @@ class MonitorRL(MonitorBase):
         if done:
             eprew = sum(self.rewards)
             eplen = len(self.rewards)
-            self.writer.add_scalar(f'rl/task_{task_id}/reward', eprew, self.env_iter)
-            self.writer.add_scalar(f'rl/task_{task_id}/ep_len', eplen, self.env_iter)
-            print(f"Step: {self.env_iter}, Reward: {eprew:.3f}, Episode Length {eplen}")
+            self.writer.add_scalar(
+                f'rl/task_{task_id}/reward', eprew, self.env_iter)
+            self.writer.add_scalar(
+                f'rl/task_{task_id}/ep_len', eplen, self.env_iter)
+            print(
+                f"Step: {self.env_iter}, Reward: {eprew:.3f}, Episode Length {eplen}")
             self.rewards = []
 
         if self.env_iter % self.eval_env_run_every == 0:
             self.run_eval_env(task_id)
-        
+
         # Log dataset norm statistic
         if self.env_iter % self.eval_env_run_every == 0:
             self.log_xu_norm(task_id)
@@ -318,12 +335,16 @@ class MonitorRL(MonitorBase):
     def log_xu_norm(self, task_id):
         if self.hparams.normalize_xu == False:
             return
-        
+
         x_mu, x_std, a_mu, a_std = self.collector.norm(task_id)
-        self.writer.add_histogram(f'rl/task_{task_id}/x_mu', x_mu, self.env_iter)
-        self.writer.add_histogram(f'rl/task_{task_id}/x_std', x_std, self.env_iter)
-        self.writer.add_histogram(f'rl/task_{task_id}/a_mu', a_mu, self.env_iter)
-        self.writer.add_histogram(f'rl/task_{task_id}/a_std', a_std, self.env_iter)
+        self.writer.add_histogram(
+            f'rl/task_{task_id}/x_mu', x_mu, self.env_iter)
+        self.writer.add_histogram(
+            f'rl/task_{task_id}/x_std', x_std, self.env_iter)
+        self.writer.add_histogram(
+            f'rl/task_{task_id}/a_mu', a_mu, self.env_iter)
+        self.writer.add_histogram(
+            f'rl/task_{task_id}/a_std', a_std, self.env_iter)
 
     def run_eval_env(self, task_id):
 
@@ -332,7 +353,8 @@ class MonitorRL(MonitorBase):
             x_dim = self.hparams.state_dim
             horizon = self.hparams.horizon
 
-            x_model = torch.tensor(x_t, dtype=torch.float32, device=gpuid).view(-1, x_dim)
+            x_model = torch.tensor(
+                x_t, dtype=torch.float32, device=gpuid).view(-1, x_dim)
 
             gt_states = [x_t]
             model_states = [x_model]
@@ -343,13 +365,14 @@ class MonitorRL(MonitorBase):
             # Agent evaluate dynamics on this set up mpc action sequences
             for t in range(horizon):
                 u = actions[t]
-                x_t, _, _, _ = env.step(u.cpu().numpy().reshape(env.action_space.shape))
+                x_t, _, _, _, _ = env.step(
+                    u.cpu().numpy().reshape(env.action_space.shape))
                 gt_states.append(x_t)
 
                 with torch.no_grad():
                     x_model = agent._dynamics(x_model, u, tid)
                 model_states.append(x_model)
-            
+
             gt_states = np.stack(gt_states)
             model_states = torch.cat(model_states, dim=0).cpu().numpy()
 
@@ -370,7 +393,8 @@ class MonitorRL(MonitorBase):
                 fig.suptitle('Open Loop Dynamics')
                 plt.legend()
                 plt.tight_layout()
-                self.writer.add_figure(f'task_{tid}/rollout', fig, self.env_iter)
+                self.writer.add_figure(
+                    f'task_{tid}/rollout', fig, self.env_iter)
                 plt.close(fig)
             return gt_states, model_states
 
@@ -393,23 +417,27 @@ class MonitorRL(MonitorBase):
                 plt.ylabel(units[d])
                 plt.xlabel("Planning Horizon")
 
-            fig.suptitle('Open Loop Dynamics (averged diff over 10 init states)')
+            fig.suptitle(
+                'Open Loop Dynamics (averged diff over 10 init states)')
             plt.tight_layout()
-            self.writer.add_figure(f'task_{tid}/rollout_avg_diff', fig, self.env_iter)
+            self.writer.add_figure(
+                f'task_{tid}/rollout_avg_diff', fig, self.env_iter)
             plt.close(fig)
 
         def run_one_eps(env, agent, tid):
             ts = time.time()
             done = False
-            x_t = env.reset()
+            x_t, _ = env.reset()
             self.agent.reset()
 
             rewards = []
             xs, us = [], []
             while (not done):
-                #env.render()
+                # env.render()
                 u_t = agent.act(x_t, task_id=tid).cpu().numpy()
-                x_tt, reward, done, info = env.step(u_t.reshape(env.action_space.shape))
+                x_tt, reward, terminated, truncated, info = env.step(
+                    u_t.reshape(env.action_space.shape))
+                done = terminated or truncated
                 xs.append(x_t)
                 us.append(u_t)
                 x_t = x_tt
@@ -428,14 +456,15 @@ class MonitorRL(MonitorBase):
             if self.hparams.model.startswith("hnet") or self.hparams.model == "chunked_hnet":
                 self.agent.cache_hnet(tid)
             self.agent.cache_state_norm(tid)
-            
+
             # # Evaluate prediction dyanmic differences
             # if self.hparams.model != "gt":
             #     x_t = env.reset()
             #     gt_states, model_states = model_rollout(env, x_t, self.agent, tid, plot=True)
 
             # Run one evaluation episode using learned policy
-            stats = [run_one_eps(env, self.agent, tid) for _ in range(self.run_eval_env_eps)]
+            stats = [run_one_eps(env, self.agent, tid)
+                     for _ in range(self.run_eval_env_eps)]
             eprews, xs, us, times = zip(*stats)
             eprew = np.mean(eprews)
             mean_time = np.mean(times)
@@ -448,21 +477,32 @@ class MonitorRL(MonitorBase):
             # Evaluate multi-step prediction difference on state/act distribution based on current MPC
             traj_diff = []
             with torch.no_grad():
-                xs = torch.tensor(xs, dtype=torch.float32, device=self.hparams.gpuid)
-                us = torch.tensor(us, dtype=torch.float32, device=self.hparams.gpuid)
-                num = xs.size(1) - self.hparams.horizon # number of traj in an episode
+                min_len_us = min(len(u) for u in us)
+                min_len_xs = min_len_us + 1  # xs has one extra final state per episode
+                xs_arr = np.stack([np.stack(x[:min_len_xs]) for x in xs])
+                us_arr = np.stack([np.stack(u[:min_len_us]) for u in us])
+                xs = torch.tensor(xs_arr, dtype=torch.float32,
+                                  device=self.hparams.gpuid)
+                us = torch.tensor(us_arr, dtype=torch.float32,
+                                  device=self.hparams.gpuid)
+                # number of traj in an episode
+                num = xs.size(1) - self.hparams.horizon
+                if num <= 0:
+                    continue
 
                 # Select all possible initial states
                 states = xs[:, 0:num, :].reshape(-1, self.hparams.state_dim)
                 for t in range(self.hparams.horizon):
                     # select the current action
-                    actions = us[:, t:t+num, :].reshape(-1, self.hparams.control_dim)
+                    actions = us[:, t:t+num,
+                                 :].reshape(-1, self.hparams.control_dim)
                     preds = self.agent._dynamics(states, actions, tid)
-                    
+
                     # compare to the ground truth
-                    gt = xs[:, t+1:t+1+num, :].reshape(-1, self.hparams.state_dim)
+                    gt = xs[:, t+1:t+1+num,
+                            :].reshape(-1, self.hparams.state_dim)
                     traj_diff.append(torch.abs(gt-preds).mean(dim=0))
-                    
+
                     # Keep making predictions
                     states = preds
 
@@ -475,14 +515,15 @@ class MonitorRL(MonitorBase):
             self.rl_stats[tid]['diff'].append(l1_pred_diff)
 
             print(f"Task: {tid}, Step: {self.env_iter} Eval reward: {eprew:.3f}, " +
-                 f"On-policy Diff: {l1_pred_diff:.5f}, Time Taken {mean_time:.1f}s")
+                  f"On-policy Diff: {l1_pred_diff:.5f}, Time Taken {mean_time:.1f}s")
 
     def save(self, task_id):
         super(MonitorRL, self).save()
 
         hp = self.hparams
         with open(f'{hp.save_folder}/RL{hp.env}_{hp.model}_{hp.seed}.csv', 'w') as f:
-            fieldnames = ['task', 'envstep', 'reward', 'runtime', 'on_policy_diff']
+            fieldnames = ['task', 'envstep',
+                          'reward', 'runtime', 'on_policy_diff']
             writer = csv.DictWriter(f, fieldnames=fieldnames)
 
             writer.writeheader()
@@ -503,9 +544,9 @@ class MonitorRL(MonitorBase):
 
         # Save Model
         save_dict = {'train_iter': self.train_iter,
-            'env_step': self.env_iter,
-            'num_tasks_seen': self.collector.num_tasks(),
-        }
+                     'env_step': self.env_iter,
+                     'num_tasks_seen': self.collector.num_tasks(),
+                     }
         for name, model in self.model_to_save.items():
             save_dict[f'{name}_state_dict'] = model.state_dict()
 
@@ -519,10 +560,11 @@ class MonitorRL(MonitorBase):
         # Save Data Collector
         with open(f'{self.tflog_dir}/data.pkl', 'wb') as f:
             pickle.dump(self.collector, f, pickle.HIGHEST_PROTOCOL)
-    
+
     @staticmethod
     def resume_from_disk(hparams):
-        tflog_dir = os.path.join(hparams.save_folder, f'TB{hparams.env}_{hparams.model}_{hparams.seed}')
+        tflog_dir = os.path.join(
+            hparams.save_folder, f'TB{hparams.env}_{hparams.model}_{hparams.seed}')
         with open(f'{tflog_dir}/data.pkl', 'rb') as f:
             # For backward compatability
             sys.modules['dataset'] = dataset
@@ -557,9 +599,9 @@ class MonitorRL(MonitorBase):
 
         with open(f'{hp.save_folder}/{hp.env}_{hp.model}_{hp.seed}.csv', 'r') as f:
             reader = csv.DictReader(f)
-        
+
             self.val_stats.append({"time": [],
-                        "nll": [], "diff": []})
+                                   "nll": [], "diff": []})
             for row in reader:
                 task = int(row['task'])
                 diff = float(row['diff'])

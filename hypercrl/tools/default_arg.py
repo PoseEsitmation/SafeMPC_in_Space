@@ -235,6 +235,9 @@ def default_arg_humanoid(hparams):
     hparams.horizon = 20
     hparams.propagation = "EP"
     hparams.reward_discount = 0.99
+    hparams.mag_noise = 1
+    hparams.pddm_kappa = 20
+    hparams.pddm_beta = 0.5
 
     # CEM
     hparams.n_sim_steps = 10 # Number of search steps

@@ -1,41 +1,41 @@
+from hypercrl.dataset.datautil import DataCollector, train_val_split
+from hypercrl.control import RandomAgent, MPC, RollOut
+from hypercrl.tools import MonitorRL, HP
+from hypercrl.tools import reset_seed, np2torch, torch2np
+from hypercrl.envs.cl_env import CLEnvHandler
+from hypercrl.model import build_model, reload_model
+from hypercrl.model.regularizer import EWCLoss, SILoss
+from hypercrl.model.mbrl import (MSELoss, LogProbLoss,
+                                 IPSelector, BoundaryTest)
+from torch.utils.data import TensorDataset, DataLoader
+import os
+import torch
+import math
+import time
+import matplotlib.pyplot as plt
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import time
-import math
-import torch
-import os
-
-from torch.utils.data import TensorDataset, DataLoader
-
-from hypercrl.model.mbrl import (MSELoss, LogProbLoss,
-                        IPSelector, BoundaryTest)
-from hypercrl.model.regularizer import EWCLoss, SILoss
-from hypercrl.model import build_model, reload_model
-from hypercrl.envs.cl_env import CLEnvHandler
-from hypercrl.tools import reset_seed, np2torch, torch2np
-from hypercrl.tools import MonitorRL, HP
-from hypercrl.control import RandomAgent, MPC, RollOut
-from hypercrl.dataset.datautil import DataCollector, train_val_split
 
 
 def augment_model_before(task_id, model, logger, collector, hparams):
     # Add Weight and define loss
     if hparams.model == "pnn":
         loss_fn = LogProbLoss if hparams.out_var else MSELoss
-        mll = loss_fn(model, task_id=task_id, reg_lambda = hparams.reg_lambda)
+        mll = loss_fn(model, task_id=task_id, reg_lambda=hparams.reg_lambda)
         model.add_weights(task_id)
     elif hparams.model == "coreset":
         model.add_weights(task_id)
         loss_fn = LogProbLoss if hparams.out_var else MSELoss
-        mll = loss_fn(model, task_id=task_id, reg_lambda = hparams.reg_lambda, M=hparams.M)
+        mll = loss_fn(model, task_id=task_id,
+                      reg_lambda=hparams.reg_lambda, M=hparams.M)
     elif hparams.model == "multitask":
         if hparams.mt_reinit and task_id > 0:
             model.reinit()
         model.add_weights(task_id)
         loss_fn = LogProbLoss if hparams.out_var else MSELoss
-        mll = loss_fn(model, task_id=task_id, reg_lambda = hparams.reg_lambda, M=hparams.bs)
+        mll = loss_fn(model, task_id=task_id,
+                      reg_lambda=hparams.reg_lambda, M=hparams.bs)
     elif hparams.model == "finetune":
         model.add_weights(task_id)
         loss_fn = LogProbLoss if hparams.out_var else MSELoss
@@ -45,18 +45,18 @@ def augment_model_before(task_id, model, logger, collector, hparams):
             model.reinit()
         model.add_weights(task_id)
         loss_fn = LogProbLoss if hparams.out_var else MSELoss
-        mll = loss_fn(model, task_id=-1, reg_lambda=hparams.reg_lambda)        
+        mll = loss_fn(model, task_id=-1, reg_lambda=hparams.reg_lambda)
     elif hparams.model == "ewc":
         model.add_weights(task_id)
-        mll = EWCLoss(model, task_id=task_id, reg_lambda = hparams.reg_lambda,
-                ewc_beta=hparams.ewc_beta, out_var=hparams.out_var)
+        mll = EWCLoss(model, task_id=task_id, reg_lambda=hparams.reg_lambda,
+                      ewc_beta=hparams.ewc_beta, out_var=hparams.out_var)
     elif hparams.model == "si":
         model.add_weights(task_id)
         # Zero si weight importance
         model.to(hparams.gpuid)
-        model.si_zero_stats() 
-        mll = SILoss(model, task_id=task_id, reg_lambda = hparams.reg_lambda,
-                si_c=hparams.si_c, out_var=hparams.out_var)
+        model.si_zero_stats()
+        mll = SILoss(model, task_id=task_id, reg_lambda=hparams.reg_lambda,
+                     si_c=hparams.si_c, out_var=hparams.out_var)
 
     # Put model to GPU
     gpuid = hparams.gpuid
@@ -64,10 +64,11 @@ def augment_model_before(task_id, model, logger, collector, hparams):
 
     # Optimize over the GP model params
     optimizer = torch.optim.Adam(list(model.parameters()),
-                                lr=hparams.lr)
+                                 lr=hparams.lr)
     # LR schedular
     if hparams.lr_steps is not None:
-        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, hparams.lr_steps, 0.1)
+        scheduler = torch.optim.lr_scheduler.MultiStepLR(
+            optimizer, hparams.lr_steps, 0.1)
     else:
         scheduler = None
 
@@ -75,6 +76,7 @@ def augment_model_before(task_id, model, logger, collector, hparams):
     trainer = optimizer, scheduler, mll
 
     return trainer
+
 
 def augment_model_after(task_id, model, logger, collector, hparams):
     if hparams.model == "coreset":
@@ -101,13 +103,14 @@ def augment_model_after(task_id, model, logger, collector, hparams):
         model.add_trainset(collector, task_id)
     return model
 
+
 def train(task_id, model, trainer, logger, collector, btest, hparams):
 
     # Data Loader
     train_set, val_set = collector.get_dataset(task_id)
 
     train_loader = torch.utils.data.DataLoader(train_set, batch_size=hparams.bs, shuffle=True,
-                    drop_last=True, num_workers=hparams.num_ds_worker)
+                                               drop_last=True, num_workers=hparams.num_ds_worker)
 
     # loss, optimizer, scheduler
     optimizer, scheduler, mll = trainer
@@ -117,12 +120,12 @@ def train(task_id, model, trainer, logger, collector, btest, hparams):
     it = 0
     while it < hparams.train_dynamic_iters:
         model.train()
-        
+
         for i, data in enumerate(train_loader):
             x_t, a_t, x_tt = data
             x_t, a_t, x_tt = x_t.to(gpuid), a_t.to(gpuid), x_tt.to(gpuid)
-            
-            #new_task = btest.test(x_t, a_t)
+
+            # new_task = btest.test(x_t, a_t)
             optimizer.zero_grad()
             output = model(x_t, a_t)
             loss = -mll(output, x_tt)
@@ -143,6 +146,7 @@ def train(task_id, model, trainer, logger, collector, btest, hparams):
             if it >= hparams.train_dynamic_iters:
                 break
 
+
 def play_model(hparams):
     _, agent, checkpoint, _ = reload_model(hparams)
 
@@ -159,22 +163,26 @@ def play_model(hparams):
         avg_rewards = []
         for _ in range(20):
             rewards = []
-            x_t = env.reset()
+            x_t, _ = env.reset()
             agent.reset()
             done = False
             while (not done):
                 env.render()
                 u_t = agent.act(x_t, task_id=task_id).cpu().numpy()
-                x_tt, reward, done, info = env.step(u_t.reshape(env.action_space.shape))
+                x_tt, reward, terminated, truncated, info = env.step(
+                    u_t.reshape(env.action_space.shape))
+                done = terminated or truncated
                 print(info)
                 x_t = x_tt
                 rewards.append(reward)
             eprew = np.sum(rewards)
             avg_rewards.append(eprew)
-            print(f"Task {task_id + 1}, episode reward {eprew}, ep length {len(rewards)}")
+            print(
+                f"Task {task_id + 1}, episode reward {eprew}, ep length {len(rewards)}")
 
         avg_reward = np.mean(avg_rewards)
         print(f"Average reward for task {task_id + 1} is {avg_reward}")
+
 
 def run(hparams):
 
@@ -217,9 +225,9 @@ def run(hparams):
     model.to(hparams.gpuid)
 
     # Random Policy
-    rand_pi = RandomAgent(hparams)   
+    rand_pi = RandomAgent(hparams)
 
-    # Start learning in environment 
+    # Start learning in environment
     envs = CLEnvHandler(hparams.env, hparams.seed)
     if hparams.resume:
         for tid in range(num_tasks_seen):
@@ -227,40 +235,47 @@ def run(hparams):
 
     for task_id in range(num_tasks_seen, hparams.num_tasks):
         # New Task with different friction
-        env = envs.add_task(task_id, render=False)
-        
+        env = envs.add_task(task_id, render=getattr(hparams, 'render', False))
+
         print(f"Collecting some random data first for task {task_id}")
-        x_t = env.reset()
+        x_t, _ = env.reset()
         for it in range(hparams.init_rand_steps):
             u = rand_pi.act(x_t)
-            x_tt, _, done, _ = env.step(u.reshape(env.action_space.shape))
+            x_tt, _, terminated, truncated, _ = env.step(
+                u.reshape(env.action_space.shape))
+            done = terminated or truncated
             collector.add(x_t, u, x_tt, task_id)
             x_t = x_tt
 
             if done:
-                x_t = env.reset()
+                x_t, _ = env.reset()
 
         # Augment Model
-        trainer = augment_model_before(task_id, model, logger, collector, hparams)
+        trainer = augment_model_before(
+            task_id, model, logger, collector, hparams)
         # Interact with the environment
-        x_t = env.reset()
+        x_t, _ = env.reset()
         agent.reset()
         for it in range(hparams.max_iteration):
             if it % hparams.dynamics_update_every == 0 and hparams.model != "gt":
                 # Train Dynamics Model
                 ts = time.time()
-                train(task_id, model, trainer, logger, collector, btest, hparams)
+                train(task_id, model, trainer, logger,
+                      collector, btest, hparams)
                 print('Training time', time.time() - ts)
-            #env.render()
+            if getattr(hparams, 'render', False):
+                env.render()
             u_t = agent.act(x_t, task_id=task_id).detach().cpu().numpy()
-            x_tt, reward, done, info = env.step(u_t.reshape(env.action_space.shape))
-                
-            # Update the dataset of the env in which we're training 
+            x_tt, reward, terminated, truncated, info = env.step(
+                u_t.reshape(env.action_space.shape))
+            done = terminated or truncated
+
+            # Update the dataset of the env in which we're training
             collector.add(x_t, u_t, x_tt, task_id)
             x_t = x_tt
 
             if done:
-                x_t = env.reset()
+                x_t, _ = env.reset()
                 agent.reset()
 
             logger.env_step(x_tt, reward, done, info, task_id)
@@ -274,6 +289,7 @@ def run(hparams):
     envs.close()
     logger.writer.close()
 
+
 def coreset(env, seed=None, savepath=None, play=False):
     # Hyperparameters
     hparams = HP(env, seed, savepath)
@@ -283,6 +299,7 @@ def coreset(env, seed=None, savepath=None, play=False):
         play_model(hparams)
     else:
         run(hparams)
+
 
 def ewc(env, seed=None, savepath=None, play=False):
     hparams = HP(env, seed, savepath)
@@ -299,18 +316,20 @@ def ewc(env, seed=None, savepath=None, play=False):
     else:
         run(hparams)
 
+
 def si(env, seed=None, savepath=None, play=False):
     hparams = HP(env, seed, savepath)
     hparams.model = "si"
 
     # EWC beta
-    hparams.si_c = 0.1 # si regularization strength
-    hparams.si_epsilon = 1e-3 # si damping parameter
+    hparams.si_c = 0.1  # si regularization strength
+    hparams.si_epsilon = 1e-3  # si damping parameter
 
     if play:
         play_model(hparams)
     else:
         run(hparams)
+
 
 def pnn(env, seed=None, savepath=None, play=False):
     # Hyperparameters
@@ -332,6 +351,7 @@ def finetune(env, seed=None, savepath=None, play=False):
     else:
         run(hparams)
 
+
 def multitask(env, seed=None, savepath=None, play=False):
     hparams = HP(env, seed, savepath)
     hparams.model = "multitask"
@@ -342,9 +362,11 @@ def multitask(env, seed=None, savepath=None, play=False):
     else:
         run(hparams)
 
-def single(env, seed=None, savepath=None, play=False):
+
+def single(env, seed=None, savepath=None, play=False, render=False):
     hparmas = HP(env, seed, savepath)
     hparmas.model = "single"
+    hparmas.render = render
 
     if play:
         play_model(hparmas)
@@ -361,6 +383,7 @@ def gt(env, seed=None, savepath=None, play=False):
         play_model(hparams)
     else:
         run(hparams)
+
 
 if __name__ == "__main__":
     import fire
