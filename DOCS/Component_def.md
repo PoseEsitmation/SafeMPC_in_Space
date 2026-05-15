@@ -1,139 +1,127 @@
-# Component Def 
+# Component Definition
 
-link to the graph: 
-[https://www.figma.com/board/ZT3W5ffSM1kQXYwgdJTx4Q/Safety-Aware-HyperCRL-—-Implementation-Map?node-id=0-1&p=f&t=m6Esj7VUUtCnj1mH-0](https://www.figma.com/board/ZT3W5ffSM1kQXYwgdJTx4Q/Safety-Aware-HyperCRL-—-Implementation-Map?node-id=0-1&p=f&t=m6Esj7VUUtCnj1mH-0)
+[Figma board](https://www.figma.com/board/ZT3W5ffSM1kQXYwgdJTx4Q/Safety-Aware-HyperCRL-—-Implementation-Map?node-id=0-1&p=f&t=m6Esj7VUUtCnj1mH-0)
 
-## Existing HyperCRL components
+---
 
-> Port to Python 3.12. No structural changes required.
+## Existing components (port to Python 3.12, no structural changes)
 
 ### Task embedding store
-
-Holds one learned embedding vector `e_t` per task. These are small dense vectors that encode task identity. The hypernetwork reads them to generate task-specific weights. Each embedding is trained only on its own task's data via `emb_optimizer`.
-
----
+- one vector `e_t` per task, shape `(emb_dim,)`
+- trained only on its own task via `emb_optimizer`
 
 ### Hypernetwork (`hnet`)
-
-The core of HyperCRL. A standard MLP whose output is the full weight vector for the main network. It has shared parameters `θ` across all tasks, plus one embedding per task. When you call `hnet.forward(task_id=t)`, it runs `e_t → [hidden layers] → [W1, b1, W2, b2, ...]`.
-
----
+- MLP: `e_t → shared weights θ → [W1, b1, W2, b2, ...]`
+- one embedding per task, shared `θ` across all tasks
+- output: `list[torch.Tensor]`
 
 ### Main network (`mnet`)
-
-A weight-less MLP shell. It has no trainable parameters of its own. It takes `(state, action)` as input and predicts `next_state`, but only works when weights are injected from the hypernetwork. This is the learned dynamics model used inside MPC rollouts.
-
----
+- no trainable parameters — weights injected from `hnet`
+- input: `xu (batch, state_dim + action_dim)` → output: `next_state (batch, state_dim)`
+- dynamics model used in trajectory rollouts
 
 ### Hnet regularizer
-
-Computes the anti-forgetting loss `L_reg = Σ ||hnet(e_j; θ) − target_j||²` for all previous tasks `j < t`. If this term is zero, the hypernetwork still produces the exact same weights for old tasks as it did before training on the new one — meaning the dynamics model for old tasks is unchanged.
-
----
+- prevents forgetting: penalises drift from frozen snapshots of old task outputs
+- `L_reg = Σ ‖hnet(e_j; θ) − snapshot_j‖²` for all `j < t`
 
 ### Target snapshots
-
-Before training on task `t`, the system freezes `hnet(e_0), hnet(e_1), ..., hnet(e_{t-1})` as fixed targets. The regularizer measures drift from these snapshots. They are never updated after being snapshotted.
-
----
+- frozen outputs of `hnet` for tasks `0..t-1`, taken before training on task `t`
+- never updated after snapshotting
 
 ### Dual optimizers
+- `theta_optimizer` (Adam): updates shared `θ` with `L_task + β·L_reg`
+- `emb_optimizer` (Adam): updates only current `e_t` with `L_task`
 
-Two separate Adam optimizers run in parallel. `θ_optimizer` updates the shared hypernetwork weights using both `L_task` and `L_reg`. `emb_optimizer` updates only the current task's embedding `e_t` using `L_task` alone, so old embeddings are never touched.
-
----
-
-### Replay buffer
-
-Stores `(state, action, next_state)` tuples collected by the MPC agent interacting with the environment. The training loop samples batches from this to compute `L_task`. Each task has its own buffer.
-
----
+### Replay buffer (`DataCollector`)
+- stores `(state, action, next_state)` — no reward, no done
+- shapes: `(6,)`, `(3,)`, `(6,)` for spacecraft
+- 75/25 train/val split at collection time, per task
 
 ### Training loop (`hnet_exp.py`)
-
-The main outer loop. For each task: snapshot targets, add embedding, then iterate: sample batch → compute `L_task + β·L_reg` → update both optimizers. Continues until convergence, then moves to the next task.
-
----
+- per task: snapshot → add embedding → iterate batches → update both optimizers
 
 ### MPC agent (`control/agent.py`)
+- `cache_hnet(task_id)`: stores detached `list[Tensor]` weights once per task
+- `act(state, task_id)`: runs trajectory optimizer, returns `u_proposed (3,)` as `torch.Tensor`
 
-Calls `cache_hnet(task_id)` once to store the weight list, then at each timestep calls the trajectory optimizer to plan ahead using the cached dynamics model. Returns the first action of the best trajectory found.
+### Trajectory optimizer (CEM / MPPI / PDDM)
+- owned by MPC agent as `self.control`
+- calls `mnet` + `GTCost` repeatedly for rollouts
+- outputs `u_proposed`
 
----
-
-### Trajectory optimizer
-
-Runs CEM, MPPI, or PDDM to find the action sequence that maximizes reward over a horizon. Uses `mnet.forward(state, action; W_t)` repeatedly for rollouts. Outputs `u_proposed` — the raw, unchecked action.
-
----
+### Cost function (`GTCost`, `control/reward.py`)
+- scores trajectories: `cost(x, u, t, task_id) → (batch,)`
+- required input to CEM/MPPI/PDDM alongside `mnet`
+- **needs a new `"spacecraft"` case**: quadratic tracking error + control effort
 
 ### Weight cache
+- `self._cached_weights` on MPC agent
+- avoids re-running `hnet` every step; filled once per task via `cache_hnet()`
 
-A simple dictionary mapping `task_id → weight list`. Avoids re-running the hypernetwork forward pass at every MPC timestep. Populated once per task before deployment.
-
----
-
-## Components to implement
-
-> Build from scratch. None of these exist in the current codebase.
-
-### CBF` — Control Barrier Function
-
-The mathematical safety certificate. Defines a forbidden zone as a sphere around an obstacle. The core function is:
-
+### Environment handler (`CLEnvHandler`, `envs/cl_env.py`)
+- creates and holds one env per task via `add_task(task_id)`
+- drives the data collection loop: agent → env → replay buffer
+- **needs `"spacecraft"` case added**
 
 ---
 
-### `QuadraticCLF` — Control Lyapunov Function
+## New components (build from scratch)
 
-The stability certificate. Ensures the robot converges to the goal rather than just bouncing around safely.
+### Spacecraft environment (`envs/spacecraft.py`)
+- CWH orbital dynamics (eq. 1 in paper)
+- state: `(6,)` = `[x, y, z, ẋ, ẏ, ż]` in LVLH frame
+- action: `(3,)` = `[u₁, u₂, u₃]`, bounded `±0.082 m/s²`
+- two phases: fly-around (KOZ active) and final approach (AC active)
+- **owns CBF and CLF** — exposes `get_cbf()` and `get_clf()`
+- swapping env automatically swaps the safety geometry
 
----
+### `SphericalCBF`
+- for fly-around phase; encodes keep-out zone as a sphere
+- `h(x)`: positive outside KOZ, negative inside
+- uses relative-degree-2 extension `H(x)` because `L_g h = 0` for CWH dynamics
+- QP constraint is on `H_dot`, which is linear in `u`
 
-### Safety filter core (`control/safety_filter.py`)
+### `ConicalCBF`
+- for final-approach phase; encodes approach corridor as a cone
+- `h(x)`: positive inside corridor, negative outside
+- same relative-degree-2 extension as spherical
+- only one CBF active at a time; env decides which to return from `get_cbf()`
 
-The main class that wires CBF and CLF together. Exposes a single method `filter(state, u_proposed) → u_safe`. This is the one-line insertion point into `agent.py`. Internally builds and solves the following QP at every timestep:
+### `QuadraticCLF`
+- stability certificate; drives state toward decision point `x_goal`
+- `V(x)`: quadratic, zero only at goal
+- decay rate is state-dependent (fast near goal, negligible far away)
+- `P` matrix: solved from CWH dynamics + cost matrices inside the env
 
-If the  returns `optimal` or `optimal_inaccurate`, return `u_sf.value`. Otherwise hand off to the fallback handler.
-
----
+### Safety filter (`control/safety_filter.py`)
+- **env-independent**: constructed with `cbf` and `clf` from env
+- single public method: `filter(state (6,), u_proposed (3,)) → u_safe (3,)`
+- solves a small QP each timestep:
+  - CBF constraint: hard (never relaxed)
+  - CLF constraint: soft (slack allows it to yield to CBF)
+  - input box constraint: `u in [-u_max, u_max]`
+- insertion point in `agent.py`: one line between `act()` and `env.step()`
 
 ---
 
 ## Components to adapt
 
-> Exist in the current codebase but require modification.
+### `EnvSpecs` (`envs/cl_env.py`)
+- add: `x_dims["spacecraft"] = 6`, `a_dims["spacecraft"] = 3`
 
-### State vector
+### `GTCost` (`control/reward.py`)
+- add `"spacecraft"` case: quadratic distance to goal + control effort penalty
 
-The gym observation must expose a flat array `[p_x, p_y, p_z, v_x, v_y, v_z]` in a known, fixed order. The CBF constructor reads position `p = state[:3]` and the CLF reads the full state vector. If HyperCRL's existing environments do not expose this cleanly, wrap the observation with a custom `ObservationWrapper`.
-
----
-
-### Obstacle registry
-
-The environment must expose obstacle positions and radii so the CBF can be instantiated with the right parameters. Add a method `env.get_obstacles() → list[{"center": np.ndarray, "radius": float}]` that the safety filter setup code can query at initialization.
-
----
+### `CLEnvHandler` (`envs/cl_env.py`)
+- add `"spacecraft"` branch in `add_task()`
+- on task transition: call `env.get_cbf()` and `env.get_clf()` to rebuild filter
 
 ### Reward function
-
-No structural change needed, but add a soft obstacle penalty term so the MPC agent learns to prefer safe actions during training, reducing how often the filter needs to intervene at deployment.
-
----
-
-### Task manager
-
-HyperCRL already varies task parameters (friction, gravity). Ensure the task config change also updates the CBF's `u_max` and the CLF's `P` matrix if the dynamics change significantly between tasks.
-
-
----
+- soft obstacle penalty to reduce filter intervention rate during training
 
 ### Gym step / reset
-
-
----
+- `step()`: returns 4-tuple `(obs (6,), reward, done, info)`
+- `reset()`: returns `x_0 (6,)` — no args today; planned: accept `task_id`
 
 ### Evaluator / logger
-
-Extend with three new metrics: CBF violation count per episode (should be zero), safety filter intervention rate (fraction of steps where `u_safe ≠ u_proposed`), and the performance vs safety tradeoff plot comparing reward with and without the filter.
+- add: CBF violation count, filter intervention rate, reward with/without filter

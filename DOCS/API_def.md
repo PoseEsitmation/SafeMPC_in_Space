@@ -1,206 +1,138 @@
-#
+# API Definition
+
+---
+
+## Data flow overview
+
+```
+Env ──get_cbf()/get_clf()──► SafetyFilter
+                                  ▲
+Hypernetwork ──W_t──► mnet        │
+                        │         │
+                        ▼         │
+              Trajectory optimizer │
+                        │         │
+                        ▼         │
+                   u_proposed ────┘
+                        │
+                   SafetyFilter.filter()
+                        │
+                        ▼
+                     u_safe ──► Env.step()
+                                    │
+                                    ▼
+                             Replay buffer (s, a, s')
+```
+
+**Key insertion point:** `u_proposed` → `SafetyFilter.filter()` → `u_safe`. One line in `agent.py`.
+
+---
+
 ## Cross-subsystem interfaces
 
-### `IAction` — Trajectory optimizer → Safety filter core
+### `IAction` — optimizer → safety filter
+- `u_proposed: torch.Tensor` — shape `(3,)` for spacecraft
+- `agent.act()` returns a Tensor; caller calls `.detach().cpu().numpy()` first
 
-```python
-u_proposed: np.ndarray  # shape (action_dim,)
-```
+### `ISafeAction` — safety filter → env
+- `u_safe: np.ndarray` — shape `(3,)`
+- only action env ever receives
 
-The raw action from the MPC trajectory optimizer. Unchecked, potentially unsafe.
+### `ITransition` — env → replay buffer
+- `state: np.ndarray` — shape `(6,)`
+- `action: np.ndarray` — shape `(3,)`, always `u_safe`
+- `next_state: np.ndarray` — shape `(6,)`
+- no reward, no done flag
 
----
-
-### `IObservation` — Gym state vector → Safety filter core
-
-```python
-state: np.ndarray  # shape (6,) = [p_x, p_y, p_z, v_x, v_y, v_z]
-```
-
-Must always expose position in `[:3]` and velocity in `[3:]`. CBF reads `state[:3]`, CLF reads the full vector.
-
----
-
-### `ISafeAction` — Safety filter core → Gym step
-
-```python
-u_safe: np.ndarray  # shape (action_dim,)
-```
-
-The corrected action guaranteed to satisfy CBF and CLF constraints. This is the only action the environment ever receives.
+### `ITaskConfig` — training loop → env
+- `task_id: int`
+- env derives all geometry from it; caller passes nothing else
 
 ---
 
-### `ITransition` — Gym step → Replay buffer
+## Safety filter interfaces
 
-```python
-state:      np.ndarray  # shape (6,)
-action:     np.ndarray  # shape (action_dim,) — u_safe, not u_proposed
-next_state: np.ndarray  # shape (6,)
-reward:     float
-done:       bool
-```
+> Constructed once per task: `SafetyFilter(cbf=env.get_cbf(), clf=env.get_clf())`  
+> Filter has zero knowledge of geometry — it only calls methods on the objects it received.
 
-Note: the replay buffer stores `u_safe`, not `u_proposed`. The dynamics model trains on the same action distribution it will see at deployment.
+### `CBF` (lives in env, passed to filter)
+- `CBF.H(state: np.ndarray) -> float`
+  - state shape: `(6,)`
+  - relative-degree-2 barrier; used in QP, not `h(x)` directly
+- `CBF.H_dot_expr(state: np.ndarray, u_var: cp.Variable) -> cp.Expression`
+  - linear in `u_var`
+  - QP constraint: `H_dot_expr >= epsilon`
 
----
+### `CLF` (lives in env, passed to filter)
+- `CLF.V(state: np.ndarray) -> float`
+  - state shape: `(6,)`
+- `CLF.V_dot_expr(state: np.ndarray, u_var: cp.Variable) -> cp.Expression`
+  - linear in `u_var`
+  - QP constraint: `V_dot_expr <= delta`
 
-### `ITaskConfig` — HyperCRL → Gym environment
+### `SafetyFilter.filter(state, u_proposed) -> np.ndarray`
+- inputs: `state (6,)`, `u_proposed (3,)`
+- output: `u_safe (3,)`
+- solves QP each step:
+  - minimize deviation from `u_proposed`
+  - CBF constraint: hard
+  - CLF constraint: soft (slack `delta`)
+  - input box: `u in [-u_max, u_max]`
+- on solver failure: returns `u_proposed`, logs fallback
 
-```python
-task_id:   int
-u_max:     float        # actuator limit, passed to CBF constructor
-goal:      np.ndarray   # shape (6,), passed to CLF constructor
-obstacles: list[dict]   # [{"center": np.ndarray, "radius": float}]
-```
-
-Pushed at the start of each new task. The gym uses `task_id` to vary friction/gravity. The safety filter uses `u_max`, `goal`, and `obstacles` to re-instantiate CBF and CLF for the new task.
-
----
-
-## Intra-subsystem interfaces — Safety filter
-
-### `CBF.h(state)` → `float`
-
-```python
-def h(state: np.ndarray) -> float
-# Returns h(x) = ||p − p_obs||² − r²
-# Positive = safe, negative = inside KOZ
-```
+### `IConstraintEvaluator.check(state, action) -> bool`
+- state: `(6,)`, action: `(3,)`
+- used by logger and unit tests
 
 ---
 
----
+## HyperCRL interfaces
 
-### `CBF.H_dot_expr(state, u_var)` → `cvxpy expression`
+### `Hypernetwork.forward(task_id: int) -> list[torch.Tensor]`
+- input: task id
+- output: weight list `[W1, b1, W2, b2, ...]` as tensors
 
-```python
-def H_dot_expr(state: np.ndarray, u_var: cp.Variable) -> cp.Expression
-# Returns a cvxpy expression linear in u_var
-# Used as the CBF constraint inside the QP: H_dot_expr >= epsilon
-```
+### `Hypernetwork.add_task(task_id: int, std_normal_temb: float) -> None`
+- appends new embedding `e_t`
 
----
+### `MainNetwork.forward(xu: torch.Tensor, weights: list[torch.Tensor]) -> torch.Tensor`
+- `xu` shape: `(batch, state_dim + action_dim)` = `(batch, 9)`
+- output shape: `(batch, 6)` — or `(batch, 12)` if `out_var=True`
 
-### `CLF.V(state)` → `float`
+### `MPCAgent.cache_hnet(task_id: int) -> None`
+- stores detached weights in `self._cached_weights`
+- call once per task before rollout
 
-```python
-def V(state: np.ndarray) -> float
-# Returns V(x) = (x − x_goal)ᵀ P (x − x_goal)
-# Positive definite, zero only at goal
-```
+### `MPCAgent.act(state, task_id=None, first_action=True) -> torch.Tensor`
+- output shape: `(3,)` — `u_proposed`
 
----
-
----
-
-### `CLF.V_dot_expr(state, u_var)` → `cvxpy expression`
-
-```python
-def V_dot_expr(state: np.ndarray, u_var: cp.Variable) -> cp.Expression
-# Returns a cvxpy expression linear in u_var
-# Used as the CLF constraint inside the QP: V_dot_expr <= delta
-```
+### `GTCost.__call__(x, u, t, task_id) -> torch.Tensor`
+- `x` shape: `(batch, 6)`, `u` shape: `(batch, 3)`
+- output: `(batch,)` cost per trajectory sample
+- needs a `"spacecraft"` case added
 
 ---
 
-### `SafetyFilter.filter(state, u_proposed)` → `np.ndarray`
+## Env interfaces
 
-```python
-def filter(state: np.ndarray, u_proposed: np.ndarray) -> np.ndarray
-# Core method. Builds and solves the QP.
-# Returns u_safe on success, zeros on infeasibility.
-```
+> Each env owns its CBF and CLF. Swapping env = swapping safety geometry automatically.
 
----
+### `Env.get_cbf() -> CBF`
+- returns the active CBF for the current phase
+- spacecraft: `SphericalCBF` (fly-around) or `ConicalCBF` (final approach)
 
-### `IConstraintEvaluator.check(state, action)` → `bool`
+### `Env.get_clf() -> CLF`
+- constructs and returns a `QuadraticCLF`
+- solves DARE internally; caller gets a ready-to-use object
 
-```python
-def check(state: np.ndarray, action: np.ndarray) -> bool
-# Returns True if action satisfies CBF and CLF at given state
-# Used by evaluator/logger and unit tests
-```
+### `Env.step(action: np.ndarray) -> tuple`
+- input: `u_safe (3,)`
+- output: `(obs (6,), reward, done, info)` — old gym 4-tuple
 
----
+### `Env.reset() -> np.ndarray`
+- output: `x_0 (6,)`
+- planned: accept `task_id`
 
-## Intra-subsystem interfaces — HyperCRL
-
-### `Hypernetwork.forward(task_id)` → `list[np.ndarray]`
-
-```python
-def forward(task_id: int) -> list[np.ndarray]
-# Runs e_t → [hidden layers; θ] → [W1, b1, W2, b2, ...]
-# Returns the full weight list for the main network
-```
-
----
-
-### `Hypernetwork.add_task(task_id)` → `None`
-
-```python
-def add_task(task_id: int) -> None
-# Appends a new randomly-initialized embedding e_t
-```
-
----
-
-### `MainNetwork.forward(state_action, weights)` → `np.ndarray`
-
-```python
-def forward(state_action: np.ndarray, weights: list[np.ndarray]) -> np.ndarray
-# Predicts next_state given injected weights
-# shape in: (state_dim + action_dim,), shape out: (state_dim,)
-```
-
----
-
-### `MPCAgent.cache_hnet(task_id)` → `None`
-
-```python
-def cache_hnet(task_id: int) -> None
-# Calls hnet.forward(task_id) and stores the weight list
-# Called once per task before deployment
-```
-
----
-
-### `MPCAgent.act(state, task_id)` → `np.ndarray`
-
-```python
-def act(state: np.ndarray, task_id: int) -> np.ndarray
-# Runs trajectory optimizer with cached weights
-# Returns u_proposed — passes through safety_filter.filter() before env
-```
-
----
-
-## Intra-subsystem interfaces — Gym environment
-
-### `Env.get_obstacles()` → `list[dict]`
-
-```python
-def get_obstacles() -> list[dict]
-# Returns [{"center": np.ndarray, "radius": float}, ...]
-# Called at task init to configure CBF
-```
-
----
-
-### `Env.step(action)` → `tuple`
-
-```python
-def step(action: np.ndarray) -> tuple[np.ndarray, float, bool, bool, dict]
-# gymnasium API: (obs, reward, terminated, truncated, info)
-# action received here is always u_safe
-```
-
----
-
-### `Env.reset(task_id)` → `np.ndarray`
-
-```python
-def reset(task_id: int) -> np.ndarray
-# Resets environment for given task
-# Returns initial state x_0
-```
+### `CLEnvHandler.add_task(task_id: int) -> Env`
+- creates and registers env for the given task
+- called at start of each task in the training loop
