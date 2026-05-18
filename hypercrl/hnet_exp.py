@@ -388,6 +388,8 @@ def play_model(hparams):
 
 def run(hparams):
 
+    print("[DEBUG run] ENTRY:", hparams.device)
+
     # Reset seed
     reset_seed(hparams.seed)
 
@@ -424,8 +426,11 @@ def run(hparams):
         num_tasks_seen = 0
 
     # Convert to cuda
-    mnet.to(hparams.gpuid)
-    hnet.to(hparams.gpuid)
+    mnet.to(hparams.device)
+    hnet.to(hparams.device)
+
+    print("MNET DEVICE:", next(mnet.parameters()).device)
+    print("HNET DEVICE:", next(hnet.parameters()).device)
 
     # Random Policy
     rand_pi = RandomAgent(hparams)
@@ -506,9 +511,11 @@ def hnet(env, seed=None, savepath=None, play=False, device="cpu"):
     # Hyperparameters
     hparams = HP(env, seed, savepath)
     hparams.model = "hnet"
+    hparams.device = device
 
     hparams = Hparams.add_hnet_hparams(hparams)
-    hparams.device = device
+    
+    print("[DEBUG hnet] BEFORE run:", hparams.device)
 
     if play:
         play_model(hparams)

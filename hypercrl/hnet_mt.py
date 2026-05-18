@@ -45,8 +45,8 @@ def hnet_mt_sd(seed):
     logger = MonitorHnet(hparams, agent, mnet, hnet, collector)
 
     # Convert to cuda
-    mnet.to(hparams.gpuid)
-    hnet.to(hparams.gpuid)
+    mnet.to(hparams.device)
+    hnet.to(hparams.device)
     
     # Train Model for each task
     for task_id in range(hparams.num_tasks):

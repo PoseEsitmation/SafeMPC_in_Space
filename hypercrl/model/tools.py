@@ -226,8 +226,8 @@ def reload_model_hnet(hparams, task_id=None, num_input=2):
     mnet.load_state_dict(checkpoint['mnet_state_dict'])
     hnet.load_state_dict(checkpoint['hnet_state_dict'])
     # Load model to gpu
-    mnet.to(hparams.gpuid)
-    hnet.to(hparams.gpuid)
+    mnet.to(hparams.device)
+    hnet.to(hparams.device)
     print("Hnet restored")
 
     return mnet, hnet, agent, checkpoint, collector

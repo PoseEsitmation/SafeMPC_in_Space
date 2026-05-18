@@ -130,23 +130,9 @@ def setup_environment(config, logger_name='hnet_sim_logger'):
                            'more than 1 worker (see "num_workers").')
 
     ### Select torch device.
-    ### Select torch device.
-    assert(hasattr(config, 'no_cuda') or hasattr(config, 'use_cuda'))
+    device = torch.device(getattr(config, "device", "cpu"))
 
-    # --- NEW: explicit device override from CLI ---
-    if hasattr(config, 'device') and config.device is not None:
-        device = torch.device(config.device)
-        use_cuda = device.type == "cuda"
-    else:
-    # fallback to legacy logic
-        if hasattr(config, 'no_cuda'):
-            use_cuda = not config.no_cuda and torch.cuda.is_available()
-        else:
-            use_cuda = config.use_cuda and torch.cuda.is_available()
-
-    device = torch.device("cuda" if use_cuda else "cpu")
-
-    logger.info('Using device: ' + str(device))
+    logger.info(f("Using device: {device}"))
 
     ### Initialize summary writer.
     # Flushes every 120 secs by default.
