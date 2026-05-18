@@ -502,12 +502,13 @@ def chunked_hnet(env, seed=None, savepath=None, play=False):
         run(hparams)
 
 
-def hnet(env, seed=None, savepath=None, play=False):
+def hnet(env, seed=None, savepath=None, play=False, device="cpu"):
     # Hyperparameters
     hparams = HP(env, seed, savepath)
     hparams.model = "hnet"
 
     hparams = Hparams.add_hnet_hparams(hparams)
+    hparams.device = device
 
     if play:
         play_model(hparams)

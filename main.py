@@ -12,8 +12,11 @@ if __name__ == "__main__":
         "ewc":  hypercrl.ewc,
         "si":  hypercrl.si,
         "multitask":  hypercrl.multitask,
-        'hnet':  hypercrl.hnet,
+        'hnet':  hnet,   # <-- wrapper instead of direct call
         'chunked_hnet':  hypercrl.chunked_hnet,
         'hnet_mt': hypercrl.hnet_mt,
         'hnet_replay': hypercrl.hnet_replay
     })
+
+def hnet(env, seed=None, savepath=None, play=False, device="cpu"):
+    return hypercrl.hnet(env, seed=seed, savepath=savepath, play=play, device=device)
