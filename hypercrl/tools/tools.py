@@ -213,7 +213,7 @@ class MonitorBase():
             # self.btest.plot()
 
     def validate_task(self, task_id, loader, mll, is_training=False):
-        gpuid = self.hparams.gpuid
+        device = self.hparams.device
 
         # Initialize Stats
         val_loss = 0
@@ -223,7 +223,7 @@ class MonitorBase():
         with torch.no_grad():
             for _, data in enumerate(loader):
                 x_t, a_t, x_tt = data
-                x_t, a_t, x_tt = x_t.to(gpuid), a_t.to(gpuid), x_tt.to(gpuid)
+                x_t, a_t, x_tt = x_t.to(device), a_t.to(device), x_tt.to(device)
 
                 if is_training:
                     # Inference in weight space
@@ -354,7 +354,7 @@ class MonitorRL(MonitorBase):
             horizon = self.hparams.horizon
 
             x_model = torch.tensor(
-                x_t, dtype=torch.float32, device=gpuid).view(-1, x_dim)
+                x_t, dtype=torch.float32, device=self.hparams.device).view(-1, x_dim)
 
             gt_states = [x_t]
             model_states = [x_model]
@@ -482,9 +482,9 @@ class MonitorRL(MonitorBase):
                 xs_arr = np.stack([np.stack(x[:min_len_xs]) for x in xs])
                 us_arr = np.stack([np.stack(u[:min_len_us]) for u in us])
                 xs = torch.tensor(xs_arr, dtype=torch.float32,
-                                  device=self.hparams.gpuid)
+                                  device=self.hparams.device)
                 us = torch.tensor(us_arr, dtype=torch.float32,
-                                  device=self.hparams.gpuid)
+                                  device=self.hparams.device)
                 # number of traj in an episode
                 num = xs.size(1) - self.hparams.horizon
                 if num <= 0:

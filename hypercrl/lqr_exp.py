@@ -53,14 +53,14 @@ def augment_model_before(task_id, model, logger, collector, hparams):
     elif hparams.model == "si":
         model.add_weights(task_id)
         # Zero si weight importance
-        model.to(hparams.gpuid)
+        model.to(hparams.device)
         model.si_zero_stats()
         mll = SILoss(model, task_id=task_id, reg_lambda=hparams.reg_lambda,
                      si_c=hparams.si_c, out_var=hparams.out_var)
 
     # Put model to GPU
-    gpuid = hparams.gpuid
-    model.to(gpuid)
+    device = hparams.device
+    model.to(device)
 
     # Optimize over the GP model params
     optimizer = torch.optim.Adam(list(model.parameters()),
@@ -115,7 +115,7 @@ def train(task_id, model, trainer, logger, collector, btest, hparams):
     # loss, optimizer, scheduler
     optimizer, scheduler, mll = trainer
 
-    gpuid = hparams.gpuid
+    device = hparams.device
 
     it = 0
     while it < hparams.train_dynamic_iters:
@@ -123,7 +123,7 @@ def train(task_id, model, trainer, logger, collector, btest, hparams):
 
         for i, data in enumerate(train_loader):
             x_t, a_t, x_tt = data
-            x_t, a_t, x_tt = x_t.to(gpuid), a_t.to(gpuid), x_tt.to(gpuid)
+            x_t, a_t, x_tt = x_t.to(device), a_t.to(device), x_tt.to(device)
 
             # new_task = btest.test(x_t, a_t)
             optimizer.zero_grad()
@@ -221,8 +221,8 @@ def run(hparams):
         # Start from scratch
         num_tasks_seen = 0
 
-    # Convert to cuda
-    model.to(hparams.gpuid)
+    # Convert to device
+    model.to(hparams.device)
 
     # Random Policy
     rand_pi = RandomAgent(hparams)
@@ -290,10 +290,12 @@ def run(hparams):
     logger.writer.close()
 
 
-def coreset(env, seed=None, savepath=None, play=False):
+def coreset(env, seed=None, savepath=None, play=False, device=None):
     # Hyperparameters
     hparams = HP(env, seed, savepath)
     hparams.model = "coreset"
+    if device is not None:
+        hparams.device = device
 
     if play:
         play_model(hparams)
@@ -301,9 +303,11 @@ def coreset(env, seed=None, savepath=None, play=False):
         run(hparams)
 
 
-def ewc(env, seed=None, savepath=None, play=False):
+def ewc(env, seed=None, savepath=None, play=False, device=None):
     hparams = HP(env, seed, savepath)
     hparams.model = "ewc"
+    if device is not None:
+        hparams.device = device
 
     # EWC beta
     hparams.ewc_beta = 10000
@@ -317,9 +321,11 @@ def ewc(env, seed=None, savepath=None, play=False):
         run(hparams)
 
 
-def si(env, seed=None, savepath=None, play=False):
+def si(env, seed=None, savepath=None, play=False, device=None):
     hparams = HP(env, seed, savepath)
     hparams.model = "si"
+    if device is not None:
+        hparams.device = device
 
     # EWC beta
     hparams.si_c = 0.1  # si regularization strength
@@ -331,20 +337,25 @@ def si(env, seed=None, savepath=None, play=False):
         run(hparams)
 
 
-def pnn(env, seed=None, savepath=None, play=False):
+def pnn(env, seed=None, savepath=None, play=False, device=None):
     # Hyperparameters
     hparams = HP(env, seed, savepath)
     hparams.model = "pnn"
+    if device is not None:
+        hparams.device = device
+
     if play:
         play_model(hparams)
     else:
         run(hparams)
 
 
-def finetune(env, seed=None, savepath=None, play=False):
+def finetune(env, seed=None, savepath=None, play=False, device=None):
     # Hyperparameters
     hparams = HP(env, seed, savepath)
     hparams.model = "finetune"
+    if device is not None:
+        hparams.device = device
 
     if play:
         play_model(hparams)
@@ -352,10 +363,12 @@ def finetune(env, seed=None, savepath=None, play=False):
         run(hparams)
 
 
-def multitask(env, seed=None, savepath=None, play=False):
+def multitask(env, seed=None, savepath=None, play=False, device=None):
     hparams = HP(env, seed, savepath)
     hparams.model = "multitask"
     hparams.mt_reinit = False
+    if device is not None:
+        hparams.device = device
 
     if play:
         play_model(hparams)
@@ -363,21 +376,25 @@ def multitask(env, seed=None, savepath=None, play=False):
         run(hparams)
 
 
-def single(env, seed=None, savepath=None, play=False, render=False):
-    hparmas = HP(env, seed, savepath)
-    hparmas.model = "single"
-    hparmas.render = render
+def single(env, seed=None, savepath=None, play=False, render=False, device=None):
+    hparams = HP(env, seed, savepath)
+    hparams.model = "single"
+    hparams.render = render
+    if device is not None:
+        hparams.device = device
 
     if play:
-        play_model(hparmas)
+        play_model(hparams)
     else:
-        run(hparmas)
+        run(hparams)
 
 
-def gt(env, seed=None, savepath=None, play=False):
+def gt(env, seed=None, savepath=None, play=False, device=None):
     hparams = HP(env, seed, savepath)
     hparams.model = "gt"
     hparams.control = "mpc-lqr"
+    if device is not None:
+        hparams.device = device
 
     if play:
         play_model(hparams)

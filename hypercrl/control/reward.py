@@ -70,26 +70,26 @@ except Exception:
 
 
 class GTCost():
-    def __init__(self, clenv_name, state_dim, control_dim, reward_discount, gpuid):
+    def __init__(self, clenv_name, state_dim, control_dim, reward_discount, device):
         self.env_name = clenv_name
         self.state_dim = state_dim
         self.control_dim = control_dim
         self.reward_discount = reward_discount
         if self.env_name == "metaworld10":
-            self.metaworld_rew = MetaWorldRew(gpuid)
+            self.metaworld_rew = MetaWorldRew(device)
 
         self.cartpole_x = [0, -5, 5]
         self.pole_length = [0.6, 0.8, 0.4, 1.0, 1.2, 0.7, 0.5, 0.9, 1.1, 1.3]
         self.suite_push_goal = torch.tensor(
-            [[0.07, -0.08], [0.07, 0.08], [0.23, -0.08], [0.23, 0.08]], device=gpuid)
-        self.suite_push_tolerance = torch.tensor([0.08, 0.08], device=gpuid)
+            [[0.07, -0.08], [0.07, 0.08], [0.23, -0.08], [0.23, 0.08]], device=device)
+        self.suite_push_tolerance = torch.tensor([0.08, 0.08], device=device)
         self.suite_rot_goal = torch.tensor([[-0.08, -0.08], [-0.08, 0.08], [0., -0.08], [0., 0.08],
-                                            [0., -0.08], [0., 0.08], [0.08, -0.08], [0.08, 0.08]], device=gpuid)
+                                            [0., -0.08], [0., 0.08], [0.08, -0.08], [0.08, 0.08]], device=device)
         self.suite_slide_goal = torch.tensor(
-            [[0.25, -0.03], [0.25, 0.03], [0.31, -0.03], [0.31, 0.03]], device=gpuid)
+            [[0.25, -0.03], [0.25, 0.03], [0.31, -0.03], [0.31, 0.03]], device=device)
         # [cos(pi/2), 0, sin(pi/2), 0]
         self.des_q_w = np.array(
-            [[0.7071067811865476, 0, 0.7071067811865476, 0.]])
+            [[0.7071067811865476, 0, 0.7071067811865476, 0.]]) 
 
     def __call__(self, x, u, t, task_id):
         x = x.view(-1, self.state_dim)

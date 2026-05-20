@@ -162,9 +162,9 @@ def augment_model(task_id, mnet, hnet, collector, hparams):
         mll = TaskLoss(hparams, mnet)
 
     # (Re)Put model to GPU
-    gpuid = hparams.gpuid
-    mnet.to(gpuid)
-    hnet.to(gpuid)
+    device = hparams.device
+    mnet.to(device)
+    hnet.to(device)
 
     # Optimize over the GP model params and likelihood param
     
@@ -218,9 +218,9 @@ def augment_model_after(task_id, mnet, hnet, hparams, collector):
         for i, W in enumerate(weights):
             fake_main_params.append(torch.nn.Parameter(torch.Tensor(*W.shape),
                                                  requires_grad=True))
-            fake_main_params[i].data = weights[i]
+            fake_main_params[i].data = weights[i].detach().to(hparams.device)
 
-        ewc.compute_fisher(task_id, collector, fake_main_params, hparams.gpuid, mnet,
+        ewc.compute_fisher(task_id, collector, fake_main_params, hparams.device, mnet,
             empirical_fisher=True, online=False, n_max=hparams.n_fisher,
             regression=True, allowed_outputs=None, out_var=hparams.out_var)
 
@@ -230,8 +230,8 @@ def train(task_id, mnet, hnet, trainer_misc, logger, train_set, hparams):
     train_loader = torch.utils.data.DataLoader(train_set, batch_size=hparams.bs, shuffle=True,
             drop_last=True, num_workers=hparams.num_ds_worker)
 
-    # GPUID
-    gpuid = hparams.gpuid
+    # DEVICE
+    device = hparams.device
 
     regged_outputs = None
 
@@ -248,11 +248,11 @@ def train(task_id, mnet, hnet, trainer_misc, logger, train_set, hparams):
         for i, data in enumerate(train_loader):
             if len(data) == 3:
                 x_t, a_t, x_tt = data
-                x_t, a_t, x_tt = x_t.to(gpuid), a_t.to(gpuid), x_tt.to(gpuid)
+                x_t, a_t, x_tt = x_t.to(device), a_t.to(device), x_tt.to(device)
                 X = torch.cat((x_t, a_t), dim=-1)
             else:
                 X, x_tt = data
-                X, x_tt = X.to(gpuid), x_tt.to(gpuid)
+                X, x_tt = X.to(device), x_tt.to(device)
 
             ### Train theta and task embedding.
             theta_optimizer.zero_grad()
@@ -370,7 +370,7 @@ def play_model(hparams):
         avg_rewards = []
         for _ in range(10):
             rewards = []
-            x_t = env.reset()
+            x_t, _ = env.reset()
             agent.reset()
             done = False
             while (not done):
@@ -429,8 +429,13 @@ def run(hparams):
     mnet.to(hparams.device)
     hnet.to(hparams.device)
 
-    print("MNET DEVICE:", next(mnet.parameters()).device)
-    print("HNET DEVICE:", next(hnet.parameters()).device)
+    mparams = list(mnet.parameters())
+    if len(mparams) > 0:
+        print("MNET DEVICE:", mparams[0].device)
+
+    hparams_ = list(hnet.parameters()) if hnet is not None else []
+    if len(hparams_) > 0:
+        print("HNET DEVICE:", hparams_[0].device)
 
     # Random Policy
     rand_pi = RandomAgent(hparams)
@@ -446,21 +451,22 @@ def run(hparams):
         env = envs.add_task(task_id, render=False)
         
         print(f"Collecting some random data first for task {task_id}")
-        x_t = env.reset()
+        x_t, _ = env.reset()
         for it in range(hparams.init_rand_steps):
             u = rand_pi.act(x_t)
-            x_tt, _, done, _ = env.step(u.reshape(env.action_space.shape))
+            x_tt, _, terminated, truncated, _ = env.step(u.reshape(env.action_space.shape))
+            done = terminated or truncated
             collector.add(x_t, u, x_tt, task_id)
             x_t = x_tt
             logger.data_aggregate_step(x_tt, task_id, it)
             if done:
-                x_t = env.reset()
+                x_t, _ = env.reset()
 
         # Augment Model, instantiate optimizers/regularizer targets
         trainer_misc = augment_model(task_id, mnet, hnet, collector, hparams)
 
         # Interact with the environment
-        x_t = env.reset()
+        x_t, _ = env.reset()
         agent.reset()
         for it in range(hparams.max_iteration):
             if it % hparams.dynamics_update_every == 0:
@@ -474,14 +480,15 @@ def run(hparams):
             agent.cache_hnet(task_id)
             # Run MPC
             u_t = agent.act(x_t, task_id=task_id).detach().cpu().numpy()
-            x_tt, reward, done, info = env.step(u_t.reshape(env.action_space.shape))
+            x_tt, reward, terminated, truncated, info = env.step(u_t.reshape(env.action_space.shape))
+            done = terminated or truncated
                 
             # Update the dataset of the env in which we're training 
             collector.add(x_t, u_t, x_tt, task_id)
             x_t = x_tt
 
             if done:
-                x_t = env.reset()
+                x_t, _ = env.reset()
                 agent.reset()
   
             logger.env_step(x_tt, reward, done, info, task_id)

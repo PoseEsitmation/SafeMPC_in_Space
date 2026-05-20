@@ -56,7 +56,7 @@ class Agent:
         self.reward_discount: float = hparams.reward_discount
         self._cost: GTCost = GTCost(
             self.env_name, self.state_dim, self.control_dim,
-            self.reward_discount, hparams.gpuid,
+            self.reward_discount, hparams.device,
         )
 
     def act(self, state: Union[torch.Tensor, np.ndarray],
@@ -81,7 +81,7 @@ class MPC(Agent):
         self.hnet = hnet
         self.envs = envs
         self.collector = collector
-        self.gpuid = hparams.gpuid
+        self.device = hparams.device
         self.out_var: bool = hparams.out_var
         self.normalize_xu: bool = hparams.normalize_xu if collector is not None else False
         self.gt_dynamic: bool = hparams.gt_dynamic
@@ -97,7 +97,7 @@ class MPC(Agent):
                 num_elite=hparams.num_cem_elites,
                 num_iterations=hparams.n_sim_steps,
                 horizon=hparams.horizon,
-                device=hparams.gpuid,
+                device=hparams.device,
                 u_min=None,
                 u_max=None,
                 choose_best=True,
@@ -106,7 +106,7 @@ class MPC(Agent):
         elif hparams.control == "mpc-mppi":
             noise_sigma = (
                 torch.eye(hparams.control_dim,
-                          device=hparams.gpuid, dtype=torch.float32)
+                          device=hparams.device, dtype=torch.float32)
                 * hparams.mag_noise
             )
             self.control = MPPI(
@@ -115,7 +115,7 @@ class MPC(Agent):
                 num_iter=hparams.n_sim_steps,
                 horizon=hparams.horizon,
                 lambda_=1 / hparams.pddm_kappa,
-                device=hparams.gpuid,
+                device=hparams.device,
                 u_min=None,
                 u_max=None,
             )
@@ -123,12 +123,12 @@ class MPC(Agent):
             self.control = PDDM(
                 self._dynamics, self._cost, hparams.state_dim, hparams.control_dim,
                 hparams.horizon, hparams.n_sim_particles, hparams.pddm_beta,
-                hparams.pddm_kappa, hparams.mag_noise, hparams.gpuid,
+                hparams.pddm_kappa, hparams.mag_noise, hparams.device,
             )
         elif hparams.control == "mpc-grad":
             self.control = GradPlan(
                 self._dynamics, self._cost, hparams.state_dim, hparams.control_dim,
-                hparams.n_sim_particles, hparams.n_sim_steps, hparams.horizon, hparams.gpuid,
+                hparams.n_sim_particles, hparams.n_sim_steps, hparams.horizon, hparams.device,
             )
         elif hparams.control == "mpc-lqr":
             self.control = LQR(hparams.state_dim,
@@ -136,7 +136,7 @@ class MPC(Agent):
         elif hparams.control == "manual":
             self.control = Manual(
                 hparams.env, hparams.state_dim, hparams.control_dim,
-                hparams.horizon, self._dynamics, hparams.gpuid,
+                hparams.horizon, self._dynamics, hparams.device,
             )
 
     def cache_hnet(self, task_id: int) -> None:
@@ -149,8 +149,8 @@ class MPC(Agent):
     def cache_state_norm(self, task_id: int) -> None:
         if self.normalize_xu:
             x_mu, x_std, a_mu, a_std = self.collector.norm(task_id)
-            self.x_mu, self.x_std = x_mu.to(self.gpuid), x_std.to(self.gpuid)
-            self.a_mu, self.a_std = a_mu.to(self.gpuid), a_std.to(self.gpuid)
+            self.x_mu, self.x_std = x_mu.to(self.device), x_std.to(self.device)
+            self.a_mu, self.a_std = a_mu.to(self.device), a_std.to(self.device)
 
     def _dynamics(self, x: torch.Tensor, u: torch.Tensor,
                   task_id: Optional[int]) -> torch.Tensor:
@@ -331,7 +331,7 @@ class RollOut:
         self.collector = collector
 
         self.n_samples: int = hparams.n_sim_particles
-        self.gpuid = hparams.gpuid
+        self.device = hparams.device
 
         self.x_dim: int = hparams.state_dim
         self.a_dim: int = hparams.control_dim

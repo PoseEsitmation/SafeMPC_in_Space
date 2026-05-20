@@ -293,7 +293,7 @@ class PDDM():
         self.sigma = mag_noise * torch.ones(self.ac_dim).to(gpuid)
         self.beta = beta
         self.mppi_mean = torch.zeros(
-            self.horizon, self.ac_dim, device=gpuid)  # start mean at 0
+            self.horizon, self.ac_dim, device=self.hparams.device)  # start mean at 0
 
     ###################################################################
     ###################################################################

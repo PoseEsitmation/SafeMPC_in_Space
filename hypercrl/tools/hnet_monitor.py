@@ -56,7 +56,7 @@ class MonitorHnet(MonitorRL):
     def validate_task(self, task_id, loader, mll, is_training=False):
         self.mnet.eval()
         self.hnet.eval()
-        gpuid = self.hparams.gpuid
+        device = self.hparams.device
         
         # Initialize Stats
         val_loss = 0
@@ -68,7 +68,7 @@ class MonitorHnet(MonitorRL):
 
             for _, data in enumerate(loader):
                 x_t, a_t, x_tt = data
-                x_t, a_t, x_tt = x_t.to(gpuid), a_t.to(gpuid), x_tt.to(gpuid)
+                x_t, a_t, x_tt = x_t.to(device), a_t.to(device), x_tt.to(device)
                 X = torch.cat((x_t, a_t), dim=-1)
                 
                 Y = self.mnet.forward(X, weights)
