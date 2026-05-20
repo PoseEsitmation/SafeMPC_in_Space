@@ -1,4 +1,4 @@
-from gym.envs.registration import register
+from gymnasium.envs.registration import register
 from .lqr import LQR_2DCar, LQR_HARD
 try:
     from .mujoco import *

@@ -1,10 +1,10 @@
 import numpy as np
 import os.path as osp
 import os
-import gym
+import gymnasium as gym
 
-from gym import utils
-from gym.envs.mujoco import mujoco_env
+from gymnasium import utils
+from gymnasium.envs.mujoco import mujoco_env
 
 from .wall_envs import WallEnvFactory
 from .gravity_envs import GravityEnvFactory

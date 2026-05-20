@@ -1,9 +1,9 @@
 import os
 
 import numpy as np
-import gym
-from gym import utils
-from gym.envs.mujoco import mujoco_env
+import gymnasium as gym
+from gymnasium import utils
+from gymnasium.envs.mujoco import mujoco_env
 
 import xml.etree.ElementTree as ET
 import tempfile

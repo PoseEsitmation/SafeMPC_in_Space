@@ -2,7 +2,7 @@
 pybullet==2.6.9
 
 # required for GymWrapper
-gym
+gymnasium
 
 # Mac OS X only
 hidapi

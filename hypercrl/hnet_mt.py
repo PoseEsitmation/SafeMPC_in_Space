@@ -8,7 +8,7 @@ from hypercrl.dataset.datautil import DataCollector
 from hypercrl.tools import MonitorHnet, HP, Hparams
 from hypercrl.hnet_exp import TaskLossMT, augment_model, augment_model_after, train
 from hypercrl.model import build_model_hnet, reload_model_hnet
-from hypercrl.control import MPC
+from hypercrl.control import MPC, SafeAgent
 from hypercrl.envs.cl_env import CLEnvHandler
 
 
@@ -39,7 +39,7 @@ def hnet_mt_sd(seed):
     collector = MonitorHnet.resume_from_disk(hparams)
 
     # RL Agent
-    agent = MPC(hparams, mnet, collector=collector, hnet=hnet)
+    agent = SafeAgent(hparams, mnet, collector=collector, hnet=hnet)
 
     # Monitor
     logger = MonitorHnet(hparams, agent, mnet, hnet, collector)

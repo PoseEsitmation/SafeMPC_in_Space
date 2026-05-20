@@ -1,5 +1,5 @@
 from hypercrl.dataset.datautil import DataCollector, train_val_split
-from hypercrl.control import RandomAgent, MPC, RollOut
+from hypercrl.control import RandomAgent, MPC, RollOut, SafeAgent
 from hypercrl.tools import MonitorRL, HP
 from hypercrl.tools import reset_seed, np2torch, torch2np
 from hypercrl.envs.cl_env import CLEnvHandler
@@ -213,7 +213,7 @@ def run(hparams):
         btest = BoundaryTest(model, hparams)
 
         # RL Agent
-        agent = MPC(hparams, model, collector=collector)
+        agent = SafeAgent(hparams, model, collector=collector)
 
         # Monitor
         logger = MonitorRL(hparams, agent, model, collector, btest)

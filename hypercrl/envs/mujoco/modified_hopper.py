@@ -1,11 +1,11 @@
 import numpy as np
 import os
-import gym
+import gymnasium as gym
 import os.path as osp
 
 
-from gym import utils
-from gym.envs.mujoco import mujoco_env
+from gymnasium import utils
+from gymnasium.envs.mujoco import mujoco_env
 from .wall_envs import SimpleWallEnvFactory, StairsFactory
 from .gravity_envs import GravityEnvFactory
 from .perturbed_bodypart_env import ModifiedSizeEnvFactory

@@ -14,12 +14,12 @@ in the "Getting Started with Gym" section of the OpenAI
 gym documentation.
 
 The following snippet was used to show how to list all environments.
-    from gym import envs
+    from gymnasium import envs
     print(envs.registry.all())
 
 The following snippet was used to demo basic functionality.
 
-    import gym
+    import gymnasium as gym
     env = gym.make('CartPole-v0')
     for i_episode in range(20):
         observation = env.reset()
@@ -37,7 +37,7 @@ The following snippet was used to demo basic functionality.
 
 """
 The following snippet was used to show how to list all environments.
-    from gym import envs
+    from gymnasium import envs
     print(envs.registry.all())
 
 We demonstrate equivalent functionality below.
@@ -58,7 +58,7 @@ print()
 """
 The following snippet was used to demo basic functionality.
 
-    import gym
+    import gymnasium as gym
     env = gym.make('CartPole-v0')
     for i_episode in range(20):
         observation = env.reset()

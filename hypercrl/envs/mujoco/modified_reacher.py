@@ -1,11 +1,11 @@
 import numpy as np
 import os
-import gym
+import gymnasium as gym
 import os.path as osp
 
 
-from gym import utils
-from gym.envs.mujoco import mujoco_env, ReacherEnv
+from gymnasium import utils
+from gymnasium.envs.mujoco import mujoco_env, ReacherEnv
 
 import xml.etree.ElementTree as ET
 import tempfile
