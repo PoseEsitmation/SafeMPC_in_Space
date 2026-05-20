@@ -1,1 +1,1 @@
-from .agent import MPC, RandomAgent, RollOut
+from .agent import MPC, RandomAgent, RollOut, SafeAgent

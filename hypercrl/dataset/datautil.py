@@ -1,6 +1,10 @@
-import torch
-import numpy as np
+from __future__ import annotations
+
 import random
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+import torch
 from torch.utils.data import TensorDataset, Dataset, random_split
 try:
     from gymnasium.envs.robotics.rotations import quat_mul, quat_conjugate
@@ -57,21 +61,26 @@ def train_val_split(dataset, val_size=0.25):
 
 
 class DataCollector():
-    def __init__(self, hparams):
-        self.states = {}
-        self.actions = {}
-        self.nexts = {}
-        self.train_inds = {}
-        self.val_inds = {}
+    def __init__(self, hparams) -> None:
+        self.states: Dict[int, List[np.ndarray]] = {}
+        self.actions: Dict[int, List[np.ndarray]] = {}
+        self.nexts: Dict[int, List[np.ndarray]] = {}
+        self.train_inds: Dict[int, List[int]] = {}
+        self.val_inds: Dict[int, List[int]] = {}
 
-        self.x_aggregate = {}
-        self.a_aggregate = {}
-        self.dx_aggregate = {}
-        self.norms = {}
+        self.x_aggregate: Dict[int, Tuple] = {}
+        self.a_aggregate: Dict[int, Tuple] = {}
+        self.dx_aggregate: Dict[int, Tuple] = {}
+        self.norms: Dict[int, Tuple] = {}
+
+        # Safety certificate values stored per transition; None when no filter is active
+        self.cbf_values: Dict[int, List[Optional[float]]] = {}
+        self.clf_values: Dict[int, List[Optional[float]]] = {}
+
         self.fig = None
-        self.next_mode = hparams.dnn_out
-        self.normalize_xu = hparams.normalize_xu
-        self.env_name = hparams.env
+        self.next_mode: str = hparams.dnn_out
+        self.normalize_xu: bool = hparams.normalize_xu
+        self.env_name: str = hparams.env
 
     def num_tasks(self):
         return len(self.states)
@@ -123,7 +132,15 @@ class DataCollector():
 
         return x_t, u, x_tt
 
-    def add(self, x_t, u, x_tt, task_id):
+    def add(
+        self,
+        x_t: np.ndarray,
+        u: np.ndarray,
+        x_tt: np.ndarray,
+        task_id: int,
+        cbf_val: Optional[float] = None,
+        clf_val: Optional[float] = None,
+    ) -> None:
         # Convert Format
         if isinstance(u, torch.Tensor):
             u = u.detach().cpu().numpy()
@@ -140,6 +157,8 @@ class DataCollector():
             self.states[task_id].append(x_t)
             self.actions[task_id].append(u)
             self.nexts[task_id].append(x_tt)
+            self.cbf_values[task_id].append(cbf_val)
+            self.clf_values[task_id].append(clf_val)
             if self.normalize_xu:
                 self.x_aggregate[task_id] = self.update(
                     self.x_aggregate[task_id], x_t)
@@ -149,9 +168,12 @@ class DataCollector():
             self.states[task_id] = [x_t]
             self.actions[task_id] = [u]
             self.nexts[task_id] = [x_tt]
+            self.cbf_values[task_id] = [cbf_val]
+            self.clf_values[task_id] = [clf_val]
             if self.normalize_xu:
                 self.x_aggregate[task_id] = self.update((0, 0, 0), x_t)
                 self.a_aggregate[task_id] = self.update((0, 0, 0), u)
+
         # Train or val
         is_train = (random.random() <= 0.75)
         ind = len(self.states[task_id]) - 1
@@ -185,11 +207,18 @@ class DataCollector():
 
         return self.norms[task_id]
 
-    def norm(self, task_id):
-        """
-        Return x_mu, x_std, a_mu, a_std, (dx_mu, dx_std) of the given task_id
-        """
+    def norm(self, task_id: int) -> Tuple:
         return self.norms[task_id]
+
+    def get_safety_values(
+        self, task_id: int
+    ) -> Tuple[List[Optional[float]], List[Optional[float]]]:
+        """Return (cbf_values, clf_values) for the given task.
+
+        Each list is aligned with the stored transitions; entries are None
+        when no safety filter was active for that step.
+        """
+        return self.cbf_values[task_id], self.clf_values[task_id]
 
     def get_dataset(self, task_id, ds_range=None):
         """

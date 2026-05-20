@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 
 from hypercrl.tools import reset_seed, str_to_act
 from hypercrl.tools import MonitorHnet, HP, Hparams
-from hypercrl.control import RandomAgent, MPC
+from hypercrl.control import RandomAgent, MPC, SafeAgent
 from hypercrl.envs.cl_env import CLEnvHandler
 from hypercrl.dataset.datautil import DataCollector
 
@@ -415,7 +415,7 @@ def run(hparams):
         mnet, hnet = build_model(hparams)
 
         # RL Agent
-        agent = MPC(hparams, mnet, collector=collector, hnet=hnet)
+        agent = SafeAgent(hparams, mnet, collector=collector, hnet=hnet)
 
         # Monitor
         logger = MonitorHnet(hparams, agent, mnet, hnet, collector)

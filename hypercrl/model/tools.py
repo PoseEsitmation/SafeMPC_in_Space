@@ -7,7 +7,7 @@ from .mbrl import Baseline, PNN, MTBaseline
 from .regularizer import BaselineReg
 
 from hypercrl.tools import MonitorRL, MonitorHnet, str_to_act, Hparams
-from hypercrl.control import MPC
+from hypercrl.control import MPC, SafeAgent
 
 from hypercrl.hypercl import HyperNetwork, MLP, ChunkedHyperNetworkHandler, MainNetInterface
 from hypercrl.hypercl.utils import ewc_regularizer as ewc
@@ -76,7 +76,7 @@ def reload_model(hparams, task_id=None):
     model = build_model(hparams)
     # Restore Data
     collector = MonitorRL.resume_from_disk(hparams)
-    agent = MPC(hparams, model, collector=collector)
+    agent = SafeAgent(hparams, model, collector=collector)
 
     # Load Checkpoint
     if task_id is None:
@@ -187,7 +187,7 @@ def reload_model_hnet(hparams, task_id=None, num_input=2):
     mnet, hnet = build_model_hnet(hparams, num_input=num_input)
     # Restore Data
     collector = MonitorRL.resume_from_disk(hparams)
-    agent = MPC(hparams, mnet, hnet=hnet, collector=collector)
+    agent = SafeAgent(hparams, mnet, hnet=hnet, collector=collector)
 
     # Load Checkpoint
     if task_id is None:

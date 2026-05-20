@@ -5,3 +5,6 @@ runs/
 lightning_logs/
 .ipynb_checkpoints/
 **/__pycache__
+.claude
+MUJOCO_LOG.txt
+*.log
