@@ -4,11 +4,11 @@ import xml.etree.ElementTree as ET
 import math
 
 import numpy as np
-import gym
+import gymnasium as gym
 import random
 import os
-from gym import utils
-from gym.envs.mujoco import mujoco_env
+from gymnasium import utils
+from gymnasium.envs.mujoco import mujoco_env
 import six
 
 def ModifiedMassEnvFactory(class_type):

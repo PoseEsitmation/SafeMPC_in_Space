@@ -1,12 +1,12 @@
 import numpy as np
 import os
-import gym
+import gymnasium as gym
 import os.path as osp
 
 
-from gym import utils
-from gym.envs.mujoco import mujoco_env
-from gym.envs.mujoco import InvertedPendulumEnv
+from gymnasium import utils
+from gymnasium.envs.mujoco import mujoco_env
+from gymnasium.envs.mujoco import InvertedPendulumEnv
 from .perturbed_bodypart_env import ModifiedSizeEnvFactory
 
 InvertedPendulumModifiedLengthEnv = lambda *args, **kwargs : ModifiedSizeEnvFactory(ModifiedInvertedPendulumEnv)(model_path=os.path.dirname(gym.envs.mujoco.__file__) + "/assets/inverted_pendulum.xml", *args, **kwargs)

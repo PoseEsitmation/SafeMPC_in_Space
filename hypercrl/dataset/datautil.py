@@ -3,7 +3,7 @@ import numpy as np
 import random
 from torch.utils.data import TensorDataset, Dataset, random_split
 try:
-    from gym.envs.robotics.rotations import quat_mul, quat_conjugate
+    from gymnasium.envs.robotics.rotations import quat_mul, quat_conjugate
 except Exception:
     def _ensure_2d_quat(quat):
         quat = np.asarray(quat)

@@ -1,15 +1,15 @@
 import numpy as np
-from gym import utils
-from gym.envs.mujoco import mujoco_env
+from gymnasium import utils
+from gymnasium.envs.mujoco import mujoco_env
 import os.path as osp
 from .wall_envs import MazeFactory
 from .gravity_envs import GravityEnvFactory
 from .perturbed_bodypart_env import ModifiedSizeEnvFactory
 
-from gym.envs.mujoco.ant import AntEnv
+from gymnasium.envs.mujoco.ant import AntEnv
 
 import os
-import gym
+import gymnasium as gym
 
 
 AntGravityEnv = lambda *args, **kwargs : GravityEnvFactory(ModifiedAntEnv)(model_path=os.path.dirname(gym.envs.mujoco.__file__) + "/assets/ant.xml", *args, **kwargs)

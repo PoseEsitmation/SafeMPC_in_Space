@@ -10,5 +10,4 @@ torch>=2.3.0
 torchvision>=0.18.0
 tensorboard>=2.2.1
 pyrr==0.10.3
-gym==0.17.2
-numba>=0.60.0
+gymnasium>=0.26.0,<1.0.0

@@ -1,7 +1,7 @@
 import numpy as np
-import gym
-from gym import utils
-from gym.envs.mujoco import mujoco_env
+import gymnasium as gym
+from gymnasium import utils
+from gymnasium.envs.mujoco import mujoco_env
 
 
 class HalfCheetahEnv(mujoco_env.MujocoEnv, utils.EzPickle):

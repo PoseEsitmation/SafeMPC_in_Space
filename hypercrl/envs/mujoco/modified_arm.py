@@ -1,13 +1,13 @@
 import numpy as np
-from gym import utils
-from gym.envs.mujoco import mujoco_env
+from gymnasium import utils
+from gymnasium.envs.mujoco import mujoco_env
 import os.path as osp
 from .gravity_envs import GravityEnvFactory
-from gym.envs.mujoco.pusher import PusherEnv
-from gym.envs.mujoco.striker import StrikerEnv
+from gymnasium.envs.mujoco.pusher import PusherEnv
+from gymnasium.envs.mujoco.striker import StrikerEnv
 
 import os
-import gym
+import gymnasium as gym
 import random
 import six
 

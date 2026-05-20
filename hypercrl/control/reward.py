@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 try:
-    from gym.envs.robotics.rotations import quat2euler, quat_mul
+    from gymnasium.envs.robotics.rotations import quat2euler, quat_mul
 except Exception:
     def _ensure_2d_quat(quat):
         """Normalize quaternion input to shape (N, 4); return (array, was_1d)."""
@@ -441,7 +441,7 @@ def test_mujoco(env, name, task_id=0):
 def test_hopper():
     import sys
     sys.path.insert(0, '/home/philiph/Documents/Continual-Learning')
-    import gym
+    import gymnasium as gym
     import hypercrl.envs.mujoco
 
     name = 'hopper'
@@ -466,7 +466,7 @@ def test_hopper():
 def test_cheetah():
     import sys
     sys.path.insert(0, '/home/philiph/Documents/Continual-Learning')
-    import gym
+    import gymnasium as gym
     import hypercrl.envs.mujoco
     name = 'half_cheetah'
 
@@ -486,7 +486,7 @@ def test_cheetah():
 def test_walker():
     import sys
     sys.path.insert(0, '/home/philiph/Documents/Continual-Learning')
-    import gym
+    import gymnasium as gym
     import hypercrl.envs.mujoco
     name = 'walker'
 
@@ -506,7 +506,7 @@ def test_walker():
 def test_reacher():
     import sys
     sys.path.insert(0, '/home/philiph/Documents/Continual-Learning')
-    import gym
+    import gymnasium as gym
     import hypercrl.envs.mujoco
     name = 'reacher'
 
@@ -522,7 +522,7 @@ def test_reacher():
 def test_inverted_pendulum():
     import sys
     sys.path.insert(0, '/home/philiph/Documents/Continual-Learning')
-    import gym
+    import gymnasium as gym
     import hypercrl.envs.mujoco
     name = 'inverted_pendulum'
 
@@ -542,7 +542,7 @@ def test_inverted_pendulum():
 def test_cartpole():
     import sys
     sys.path.insert(0, '/home/philiph/Documents/Continual-Learning')
-    import gym
+    import gymnasium as gym
     import hypercrl.envs
 
     # name="cartpole_bin"
@@ -584,7 +584,7 @@ def test_cartpole():
 def test_pusher():
     import sys
     sys.path.insert(0, '/home/philiph/Documents/Continual-Learning')
-    import gym
+    import gymnasium as gym
     from hypercrl.envs.rs import PandaCL
 
     import robosuite as suite
@@ -605,7 +605,7 @@ def test_pusher():
 def test_door():
     import sys
     sys.path.insert(0, '/home/philiph/Documents/Continual-Learning')
-    import gym
+    import gymnasium as gym
     from hypercrl.envs.rs import PandaDoor
 
     import robosuite as suite
@@ -653,7 +653,7 @@ def test_door():
 def test_pusher_rot():
     import sys
     sys.path.insert(0, '/home/philiph/Documents/Continual-Learning')
-    import gym
+    import gymnasium as gym
     from hypercrl.envs.rs import PandaRot
 
     import robosuite as suite
@@ -674,7 +674,7 @@ def test_pusher_rot():
 def test_pusher_slide():
     import sys
     sys.path.insert(0, '/home/philiph/Documents/Continual-Learning')
-    import gym
+    import gymnasium as gym
     from hypercrl.envs.rs import PandaSlide
 
     import robosuite as suite

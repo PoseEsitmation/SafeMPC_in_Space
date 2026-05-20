@@ -14,7 +14,7 @@ from robosuite.models.tasks import Task, UniformRandomSampler, TableTopTask
 
 from robosuite.models.grippers import PandaGripper
 from robosuite.models.objects import MujocoXMLObject
-from gym.envs.robotics.rotations import (quat2euler, subtract_euler, quat_mul,\
+from gymnasium.envs.robotics.rotations import (quat2euler, subtract_euler, quat_mul,\
                                         quat2axisangle, quat_conjugate, quat2mat)
 
 def print_quat(obs): 

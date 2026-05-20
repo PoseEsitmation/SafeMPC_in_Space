@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 
-import gym
+import gymnasium as gym
 
 class LQR():
     x_dim = None

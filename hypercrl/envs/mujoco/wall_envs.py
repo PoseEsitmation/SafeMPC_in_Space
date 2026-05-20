@@ -5,11 +5,11 @@ import math
 
 import numpy as np
 
-import gym
+import gymnasium as gym
 import random
 import os
-from gym import utils
-from gym.envs.mujoco import mujoco_env
+from gymnasium import utils
+from gymnasium.envs.mujoco import mujoco_env
 
 import pyrr
 from pyrr.utils import all_parameters_as_numpy_arrays

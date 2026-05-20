@@ -1,8 +1,8 @@
-import gym
+import gymnasium as gym
 import os
 import numpy as np
 from scipy.spatial.transform import Rotation as R
-from gym.wrappers import TimeLimit
+from gymnasium.wrappers import TimeLimit
 
 # robosuite
 try:
