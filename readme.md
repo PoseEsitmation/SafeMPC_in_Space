@@ -80,15 +80,24 @@ In addition, this repository also requires the MuJoCo physics engine to be insta
 
 ### Individual Experiment
 
-Use the main python file to start training the RL experiment in any environment
-
-```
-python main.py [method_name] [env_name] (optional seed) (optional save_dir)
+```bash
+python main.py run --method METHOD --env ENV --device DEVICE
 ```
 
-```[method_name]``` can be one of ```hnet```, ```coreset```, ```ewc```, ```si```, ```multitask```, ```single``` or ```finetune```
+## EXAMPLES
+```bash id="q1k9vd"
+python main.py run --method hnet --env cartpole --device cpu
+python main.py run --method ewc  --env cartpole --device cpu
+python main.py run --method si   --env cartpole --device cuda:0
+```
 
-```[env_name]``` can be one of ```pusher```, ```door_pose```, or ```half_cheetah_body```
+## OPTIONAL
+```bash id="z8m0la"
+--seed      reproducibility
+--savepath  logs
+--device    cpu | cuda | mps
+```
+```
 
 ### Playback Trained Model
 Use the main python file to reload a checkpoint and replay a trained agent in a GUI window
