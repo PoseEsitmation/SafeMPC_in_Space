@@ -449,7 +449,7 @@ def run(hparams):
 
     for task_id in range(num_tasks_seen, hparams.num_tasks):
         # New Task with different friction
-        env = envs.add_task(task_id, render=False)
+        env = envs.add_task(task_id, render=getattr(hparams, 'render', False))
         
         print(f"Collecting some random data first for task {task_id}")
         x_t, _ = env.reset()
@@ -476,7 +476,8 @@ def run(hparams):
                 train_set, _ = collector.get_dataset(task_id)
                 train(task_id, mnet, hnet, trainer_misc, logger, train_set, hparams)
                 print("Training time", time.time() - ts)
-            # env.render()
+            if getattr(hparams, 'render', False):
+                env.render()
             # Cache the mainnet weight
             agent.cache_hnet(task_id)
             # Run MPC
@@ -502,10 +503,11 @@ def run(hparams):
     envs.close()
     logger.writer.close()
 
-def chunked_hnet(env, seed=None, savepath=None, play=False):
+def chunked_hnet(env, seed=None, savepath=None, play=False, render=False):
     # Hyperparameters
     hparams = HP(env, seed, savepath)
     hparams.model = "chunked_hnet"
+    hparams.render = render
 
     hparams = Hparams.add_chunked_hnet_hparams(hparams)
 
@@ -515,10 +517,11 @@ def chunked_hnet(env, seed=None, savepath=None, play=False):
         run(hparams)
 
 
-def hnet(env, seed=None, savepath=None, play=False, device="cpu"):
+def hnet(env, seed=None, savepath=None, play=False, render=False, device="cpu"):
     # Hyperparameters
     hparams = HP(env, seed, savepath)
     hparams.model = "hnet"
+    hparams.render = render
     hparams.device = device
 
     hparams = Hparams.add_hnet_hparams(hparams)
@@ -559,10 +562,11 @@ def hnet_ewc(env, seed=None, savepath=None, play=False):
     else:
         run(hparams)
 
-def hnet_mt(env, seed=None, savepath=None, play=False):
+def hnet_mt(env, seed=None, savepath=None, play=False, render=False):
     # Hyperparameters
     hparams = HP(env, seed, savepath)
     hparams.model = "hnet_mt"
+    hparams.render = render
 
     hparams = Hparams.add_hnet_hparams(hparams)
     hparams.beta = 0
@@ -573,10 +577,11 @@ def hnet_mt(env, seed=None, savepath=None, play=False):
     else:
         run(hparams)
 
-def hnet_replay(env, seed=None, savepath=None, play=False):
+def hnet_replay(env, seed=None, savepath=None, play=False, render=False):
     # Hyperparameters
     hparams = HP(env, seed, savepath)
     hparams.model = "hnet_replay"
+    hparams.render = render
 
     hparams = Hparams.add_hnet_hparams(hparams)
     hparams.beta = 0.05

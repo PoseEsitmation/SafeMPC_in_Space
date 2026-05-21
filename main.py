@@ -78,6 +78,7 @@ def run_hnet(args):
         seed=args.seed,
         savepath=args.savepath,
         play=args.play,
+        render=args.rendering,
         device=args.device
     )
 
@@ -88,6 +89,7 @@ def run_pnn(args):
         args.env,
         seed=args.seed,
         savepath=args.savepath,
+        render=args.rendering,
         device=args.device
     )
 
@@ -98,6 +100,7 @@ def run_ewc(args):
         args.env,
         seed=args.seed,
         savepath=args.savepath,
+        render=args.rendering,
         device=args.device
     )
 
@@ -108,6 +111,7 @@ def run_coreset(args):
         args.env,
         seed=args.seed,
         savepath=args.savepath,
+        render=args.rendering,
         device=args.device
     )
 
@@ -118,6 +122,7 @@ def run_finetune(args):
         args.env,
         seed=args.seed,
         savepath=args.savepath,
+        render=args.rendering,
         device=args.device
     )
 
@@ -128,6 +133,7 @@ def run_si(args):
         args.env,
         seed=args.seed,
         savepath=args.savepath,
+        render=args.rendering,
         device=args.device
     )
 
@@ -138,6 +144,7 @@ def run_multitask(args):
         args.env,
         seed=args.seed,
         savepath=args.savepath,
+        render=args.rendering,
         device=args.device
     )
 
@@ -159,6 +166,7 @@ def run_chunked_hnet(args):
         args.env,
         seed=args.seed,
         savepath=args.savepath,
+        render=args.rendering,
         device=args.device
     )
 
@@ -169,6 +177,7 @@ def run_hnet_mt(args):
         args.env,
         seed=args.seed,
         savepath=args.savepath,
+        render=args.rendering,
         device=args.device
     )
 
@@ -179,6 +188,7 @@ def run_hnet_replay(args):
         args.env,
         seed=args.seed,
         savepath=args.savepath,
+        render=args.rendering,
         device=args.device
     )
 
