@@ -148,6 +148,7 @@ def run_single(args):
         args.env,
         seed=args.seed,
         savepath=args.savepath,
+        render=args.rendering,
         device=args.device
     )
 
@@ -229,6 +230,7 @@ def main():
     run_parser.add_argument("--savepath", type=str, default=None)
     run_parser.add_argument("--play", action="store_true")
     run_parser.add_argument("--device", type=str, default=None)
+    run_parser.add_argument("--rendering", action="store_true")
 
     args = parser.parse_args()
 
