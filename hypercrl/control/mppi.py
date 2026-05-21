@@ -273,7 +273,7 @@ class PDDM():
     """
 
     def __init__(self, dynamics, cost, nx, na, horizon, num_samples, beta,
-                 kappa, mag_noise, gpuid):
+                 kappa, mag_noise, device):
 
         ###########
         # params
@@ -282,7 +282,7 @@ class PDDM():
         self.N = num_samples
         self._dynamics = dynamics
         self.cost_func = cost
-        self.gpuid = gpuid
+        self.device = device
 
         #############
         # init mppi vars
@@ -290,10 +290,10 @@ class PDDM():
         self.x_dim = nx
         self.ac_dim = na
         self.mppi_kappa = kappa
-        self.sigma = mag_noise * torch.ones(self.ac_dim).to(gpuid)
+        self.sigma = mag_noise * torch.ones(self.ac_dim).to(device)
         self.beta = beta
         self.mppi_mean = torch.zeros(
-            self.horizon, self.ac_dim, device=self.hparams.device)  # start mean at 0
+            self.horizon, self.ac_dim, device=self.device)  # start mean at 0
 
     ###################################################################
     ###################################################################
@@ -303,7 +303,7 @@ class PDDM():
 
     def reset(self):
         self.mppi_mean = torch.zeros(
-            self.horizon, self.ac_dim, device=self.gpuid)  # start mean at 0
+            self.horizon, self.ac_dim, device=self.device)  # start mean at 0
 
     def mppi_update(self, costs, all_samples):
 
@@ -328,7 +328,7 @@ class PDDM():
     def command(self, state, task_id, first_action=True):
         # Convert to torch
         if not torch.is_tensor(state):
-            state = torch.tensor(state, device=self.gpuid, dtype=torch.float32)
+            state = torch.tensor(state, device=self.device, dtype=torch.float32)
         # set the shape properly
         if state.shape != (self.N, self.x_dim):
             state = state.view(1, -1).repeat(self.N, 1)
@@ -346,7 +346,7 @@ class PDDM():
         # np.random.seed()  # to get different action samples for each rollout
 
         eps = torch.randn((self.N, self.horizon, self.ac_dim),
-                          device=self.gpuid) * self.sigma
+                          device=self.device) * self.sigma
 
         # actions = mean + noise... then smooth the actions temporally
         all_samples = eps.clone()
@@ -363,7 +363,7 @@ class PDDM():
         # Get result of executing those candidate action sequences
         #################################################
         self.states = []
-        cost_total = torch.zeros(self.N, device=self.gpuid)
+        cost_total = torch.zeros(self.N, device=self.device)
         for i in range(self.horizon):
             u = all_samples[:, i, :]
             state = self._dynamics(state, u, task_id)

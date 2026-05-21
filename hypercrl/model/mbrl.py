@@ -212,7 +212,7 @@ class MTBaseline(Baseline):
     def __init__(self, hparams):
         super(MTBaseline, self).__init__(hparams)
 
-        self.gpuid = hparams.gpuid
+        self.device = hparams.device
         self.bs = hparams.bs
         self.old_data, self.old_data_iter = [], []
         self.counter = 0
@@ -241,7 +241,7 @@ class MTBaseline(Baseline):
             data = next(loader_it)
 
         x_t, a_t, x_tt = data
-        x_t, a_t, x_tt = x_t.to(self.gpuid), a_t.to(self.gpuid), x_tt.to(self.gpuid)
+        x_t, a_t, x_tt = x_t.to(self.device), a_t.to(self.device), x_tt.to(self.device)
 
         pred = self.forward(x_t, a_t, task_id)
         return pred, x_tt

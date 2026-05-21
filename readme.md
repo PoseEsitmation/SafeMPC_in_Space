@@ -108,7 +108,7 @@ python main.py run --method si   --env cartpole --device cuda:0
 ### Playback Trained Model
 Use the main python file to reload a checkpoint and replay a trained agent in a GUI window
 ```
-python main.py [method_name] [env_name] (optional seed) (optional save_dir) --play
+python main.py [METHOD] [ENV] (optional seed) (optional save_dir) --play
 ```
 
 ### Reproduce All Results

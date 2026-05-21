@@ -349,7 +349,7 @@ class MonitorRL(MonitorBase):
     def run_eval_env(self, task_id):
 
         def model_rollout(env, x_t, agent, tid, plot=False):
-            gpuid = self.hparams.gpuid
+            device = self.hparams.device
             x_dim = self.hparams.state_dim
             horizon = self.hparams.horizon
 

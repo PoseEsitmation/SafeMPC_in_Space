@@ -1,3 +1,4 @@
+import torch
 
 class Hparams():
     @staticmethod
@@ -115,7 +116,11 @@ def HP(env, seed=None, save_folder='./runs/lqr'):
     # common RL setting
     hparams.env = env
     hparams.gt_dynamic = False
-    hparams.gpuid = "cuda:0"
+    hparams.device = (
+    "cuda:0" if torch.cuda.is_available()
+    else "mps" if torch.backends.mps.is_available()
+    else "cpu"
+    )
     
     if env == "lqr":
         return default_arg_2d_car(hparams)
@@ -316,7 +321,10 @@ def default_arg_pendulum(hparams):
     hparams.bs = 20
     hparams.reg_lambda = 0
     hparams.train_dynamic_iters = 1000
-    hparams.gpuid = 'cuda:0'
+    
+    #Central Device
+    if not hasattr(hparams, "device"):
+        hparams.device = "cpu"
     hparams.eval_every = 500
 
     # Size of inducing points
@@ -360,7 +368,9 @@ def default_arg_inverted_pendulum(hparams):
     hparams.bs = 100
     hparams.reg_lambda = 0.0001
     hparams.train_dynamic_iters = 2000
-    hparams.gpuid = 'cuda:0'
+    #Central Device
+    if not hasattr(hparams, "device"):
+        hparams.device = "cpu"
     hparams.eval_every = 2000
 
     # Size of inducing points
@@ -454,7 +464,9 @@ def default_arg_cartpole(hparams):
     hparams.reg_lambda = 0.00005
     hparams.train_dynamic_iters = 500
     hparams.print_train_every = 500
-    hparams.gpuid = 'cuda:0'
+    #Central Device
+    if not hasattr(hparams, "device"):
+        hparams.device = "cpu"
     hparams.eval_every = 500
 
     # Size of inducing points
@@ -501,7 +513,9 @@ def default_arg_cartpole_bin(hparams):
     hparams.reg_lambda = 0.00005
     hparams.train_dynamic_iters = 500
     hparams.print_train_every = 500
-    hparams.gpuid = 'cuda:0'
+    #Central Device
+    if not hasattr(hparams, "device"):
+        hparams.device = "cpu"
     hparams.eval_every = 500
 
     # Size of inducing points
@@ -636,7 +650,9 @@ def default_arg_reacher(hparams):
     hparams.reg_lambda = 0.00005
     hparams.train_dynamic_iters = 150
     hparams.print_train_every = 150
-    hparams.gpuid = 'cuda:0'
+    #Central Device
+    if not hasattr(hparams, "device"):
+        hparams.device = "cpu"
     hparams.eval_every = 150
 
     # Size of inducing points
@@ -687,7 +703,9 @@ def default_arg_pusher(hparams):
     hparams.reg_lambda = 0
     hparams.train_dynamic_iters = 2000
     hparams.print_train_every = 500
-    hparams.gpuid = 'cuda:0'
+    #Central Device
+    if not hasattr(hparams, "device"):
+        hparams.device = "cpu"
     hparams.eval_every = 1000
 
     # Size of inducing points
@@ -738,7 +756,9 @@ def default_arg_pusher_rot(hparams):
     hparams.reg_lambda = 0
     hparams.train_dynamic_iters = 2000
     hparams.print_train_every = 500
-    hparams.gpuid = 'cuda:0'
+    #Central Device
+    if not hasattr(hparams, "device"):
+        hparams.device = "cpu"
     hparams.eval_every = 1000
 
     # Size of inducing points
@@ -789,7 +809,9 @@ def default_arg_pusher_slide(hparams):
     hparams.reg_lambda = 0
     hparams.train_dynamic_iters = 500
     hparams.print_train_every = 500
-    hparams.gpuid = 'cuda:0'
+    #Central Device
+    if not hasattr(hparams, "device"):
+        hparams.device = "cpu"
     hparams.eval_every = 1000
 
     # Size of inducing points
@@ -840,7 +862,9 @@ def default_arg_door(hparams):
     hparams.reg_lambda = 0
     hparams.train_dynamic_iters = 2000
     hparams.print_train_every = 500
-    hparams.gpuid = 'cuda:0'
+    #Central Device
+    if not hasattr(hparams, "device"):
+        hparams.device = "cpu"
     hparams.eval_every = 1000
 
     # Size of inducing points
@@ -891,7 +915,9 @@ def default_arg_door_pose(hparams):
     hparams.reg_lambda = 0.00001
     hparams.train_dynamic_iters = 200
     hparams.print_train_every = 200
-    hparams.gpuid = 'cuda:0'
+    #Central Device
+    if not hasattr(hparams, "device"):
+        hparams.device = "cpu"
     hparams.eval_every = 200
 
     # Size of inducing points

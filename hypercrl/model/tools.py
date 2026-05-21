@@ -85,7 +85,7 @@ def reload_model(hparams, task_id=None):
     else:
         model_path = os.path.join(hparams.save_folder,
             f'TB{hparams.env}_{hparams.model}_{hparams.seed}', f'model_{task_id}.pt')     
-    checkpoint = torch.load(model_path, map_location=hparams.gpuid)
+    checkpoint = torch.load(model_path, map_location=hparams.device)
     print("Checkpoint Loaded")
 
     # Add task to the model
@@ -110,7 +110,7 @@ def reload_model(hparams, task_id=None):
         model.load_state_dict(checkpoint['model_state_dict'])
 
     # Load model to gpu
-    model.to(hparams.gpuid)
+    model.to(hparams.device)
     print("Model restored")
 
     return model, agent, checkpoint, collector
@@ -197,7 +197,7 @@ def reload_model_hnet(hparams, task_id=None, num_input=2):
         model_path = os.path.join(hparams.save_folder,
             f'TB{hparams.env}_{hparams.model}_{hparams.seed}', f'model_{task_id}.pt')     
 
-    checkpoint = torch.load(model_path, map_location=hparams.gpuid)
+    checkpoint = torch.load(model_path, map_location=hparams.devices)
     print("Checkpoint Loaded")
 
     # Remove potentially unwanted data collector datas

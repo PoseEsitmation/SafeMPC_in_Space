@@ -205,7 +205,9 @@ class GTCost():
 
 
 class MetaWorldRew():
-    def __init__(self, gpuid):
+    def __init__(self, hparams):
+
+        device = hparams.device
         # Goals
         reach_goal = torch.tensor([-0.1, 0.8, 0.2])
         push_goal = torch.tensor([0.1, 0.8, 0.02])
@@ -227,16 +229,16 @@ class MetaWorldRew():
         maxPlacingDist = torch.norm(torch.Tensor([obj_init_pos[0], obj_init_pos[1], heightTarget])
                                     - pick_place_goal) + heightTarget
 
-        self.reach_goal = reach_goal.to(gpuid)
-        self.push_goal = push_goal.to(gpuid)
-        self.pick_place_goal = pick_place_goal.to(gpuid)
-        self.init_fingerCOM = init_fingerCOM.to(gpuid)
-        self.obj_init_pos = obj_init_pos.to(gpuid)
-        self.objHeight = objHeight.to(gpuid)
-        self.heightTarget = heightTarget.to(gpuid)
-        self.maxReachDist = maxReachDist.to(gpuid)
-        self.maxPushDist = maxPushDist.to(gpuid)
-        self.maxPlacingDist = maxPlacingDist.to(gpuid)
+        self.reach_goal = reach_goal.to(device)
+        self.push_goal = push_goal.to(device)
+        self.pick_place_goal = pick_place_goal.to(device)
+        self.init_fingerCOM = init_fingerCOM.to(device)
+        self.obj_init_pos = obj_init_pos.to(device)
+        self.objHeight = objHeight.to(device)
+        self.heightTarget = heightTarget.to(device)
+        self.maxReachDist = maxReachDist.to(device)
+        self.maxPushDist = maxPushDist.to(device)
+        self.maxPlacingDist = maxPlacingDist.to(device)
 
         # Shaped reward constants
         self.c1 = 1000
@@ -357,13 +359,13 @@ class MetaWorldRew():
         return reward
 
 
-def test_metaworld():
+def test_metaworld(hparams):
     from metaworld.benchmarks import MT10
     import numpy as np
     import random
     env = MT10.get_train_tasks()
-    gpuid = 'cuda:0'
-    rew_fn = MetaWorldRew(gpuid)
+    device = hparams.device
+    rew_fn = MetaWorldRew(device)
 
     env.seed(0)
     np.random.seed(0)
@@ -390,22 +392,22 @@ def test_metaworld():
         #     u_torch.append(torch.FloatTensor(u).view(1, -1))
         #     x_t = x_tt
 
-        x_torch = torch.cat(x_torch, dim=0).to(gpuid)
-        u_torch = torch.cat(u_torch, dim=0).to(gpuid)
+        x_torch = torch.cat(x_torch, dim=0).to(device)
+        u_torch = torch.cat(u_torch, dim=0).to(device)
 
         rew = rew_fn.reward(x_torch, u_torch, 0, task_id)
-        rew_gt = torch.tensor(rew_gt).to(gpuid)
+        rew_gt = torch.tensor(rew_gt).to(device)
         diff = torch.abs((rew_gt - rew)/rew_gt)
         print("Task", task_id)
         print("max diff", diff.max().item())
         print("mean diff", diff.mean().item())
 
 
-def test_mujoco(env, name, task_id=0):
-    gpuid = 'cuda:0'
+def test_mujoco(env, name, task_id=0, hparams="cpu"):
+    device = hparams.device
     x_dim = env.observation_space.shape[0]
     u_dim = env.action_space.shape[0]
-    cost_fn = GTCost(name, x_dim, u_dim, 1.0, gpuid)
+    cost_fn = GTCost(name, x_dim, u_dim, 1.0, device)
 
     x_t = env.reset()
     x_torch = []
@@ -425,10 +427,10 @@ def test_mujoco(env, name, task_id=0):
         else:
             not_dones.append(i)
 
-    x_torch = torch.cat(x_torch, dim=0).to(gpuid)
-    u_torch = torch.cat(u_torch, dim=0).to(gpuid)
+    x_torch = torch.cat(x_torch, dim=0).to(device)
+    u_torch = torch.cat(u_torch, dim=0).to(device)
     rew = -cost_fn(x_torch, u_torch, 0, task_id)
-    rew_gt = torch.tensor(rew_gt).to(gpuid)
+    rew_gt = torch.tensor(rew_gt).to(device)
     diff = torch.abs((rew_gt[not_dones] - rew[not_dones]) / rew_gt[not_dones])
     print(f"Env {name}")
     print(f"max diff, {diff.max().item():.4f}")

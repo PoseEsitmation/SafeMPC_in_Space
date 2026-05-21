@@ -81,7 +81,8 @@ class TaskLossMT(TaskLoss):
         super().__init__(hparams, mnet)
         self.hnet = hnet
         self.task_id = task_id
-        self.gpuid = hparams.gpuid
+        self.hparams = hparams
+        self.device = hparams.device
     
         self.add_trainset(collector, task_id, hparams)
 
@@ -109,7 +110,7 @@ class TaskLossMT(TaskLoss):
             data = next(loader_it)
 
         x_t, a_t, x_tt = data
-        x_t, a_t, x_tt = x_t.to(self.gpuid), a_t.to(self.gpuid), x_tt.to(self.gpuid)
+        x_t, a_t, x_tt = x_t.to(self.device), a_t.to(self.device), x_tt.to(self.device)
 
         # Forward Pass
         X = torch.cat((x_t, a_t), dim=-1)
