@@ -82,6 +82,13 @@ In addition, this repository also requires the MuJoCo physics engine to be insta
 
 ```bash
 python main.py run --method METHOD --env ENV --device DEVICE
+
+[METHOD] can be one of hnet, coreset, ewc, si, multitask, single or finetune
+
+[ENV] can be one of pusher, door_pose, or half_cheetah_body
+
+[DEVICE] can be cuda, cpu, mps
+
 ```
 
 ## EXAMPLES
@@ -95,7 +102,6 @@ python main.py run --method si   --env cartpole --device cuda:0
 ```bash id="z8m0la"
 --seed      reproducibility
 --savepath  logs
---device    cpu | cuda | mps
 ```
 ```
 
