@@ -64,11 +64,13 @@ Training metrics are logged automatically. To view them:
 **Step 1 — Start training** (Terminal 1):
 ```bash
 python main.py run --method METHOD --env ENV --savepath ./runs/my_experiment
+# e.g.: python main.py run --method single --env cartpole --device cpu --seed 42 --savepath ./runs/cartpole
 ```
 
 **Step 2 — Start TensorBoard** (Terminal 2):
 ```bash
 tensorboard --logdir /absolute/path/to/runs/my_experiment
+# e.g.: tensorboard --logdir /home/user/SafeMPC_in_Space/runs/cartpole
 ```
 
 **Step 3 — Open browser:**
