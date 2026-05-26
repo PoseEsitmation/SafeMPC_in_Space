@@ -82,12 +82,19 @@ Click **Scalars** to see training loss and reward curves. TensorBoard refreshes 
 
 **What is logged:**
 
-| Tag | Description |
-| --- | --- |
-| `train/mse_loss` | Dynamics model training loss |
-| `train/regularizer` | Weight shift between tasks |
-| `rl/task_N/reward` | Episode return during training |
-| `rl/task_N/ep_len` | Episode length during training |
-| `task_N/rollout_avg_diff` | Open-loop prediction error per state dimension |
+| Tag | Tab in TensorBoard | Description |
+| --- | --- | --- |
+| `train/mse_loss` | Scalars | Dynamics model training loss |
+| `train/regularizer` | Scalars | Weight shift between tasks |
+| `val/task_N/loss` | Scalars | Validation loss per task |
+| `val/task_N/diff` | Scalars | Validation prediction error per task |
+| `rl/task_N/reward` | Scalars | Episode return during training |
+| `rl/task_N/ep_len` | Scalars | Episode length during training |
+| `rl/task_N/x_mu` | Histograms | Mean of state dimensions (normalization stats) |
+| `rl/task_N/x_std` | Histograms | Std of state dimensions (normalization stats) |
+| `rl/task_N/a_mu` | Histograms | Mean of action dimensions (normalization stats) |
+| `rl/task_N/a_std` | Histograms | Std of action dimensions (normalization stats) |
+| `train/weight/*` | Histograms | Network weight distributions |
+| `task_N/rollout_avg_diff` | Images | Open-loop prediction error per state dimension |
 
 > **Tip:** Always use `--savepath` with an absolute path in the `tensorboard --logdir` argument to avoid path confusion.
