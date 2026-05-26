@@ -125,8 +125,9 @@ class MonitorBase():
         self.hparams = hparams
         self.collector = collector
         self.btest = btest
+        timestamp = time.strftime('%Y%m%d_%H%M%S')
         self.tflog_dir = os.path.join(
-            hparams.save_folder, f'TB{hparams.env}_{hparams.model}_{hparams.seed}')
+            hparams.save_folder, f'TB{hparams.env}_{hparams.model}_{hparams.seed}_{timestamp}')
         self.writer = SummaryWriter(log_dir=self.tflog_dir)
 
         self.val_stats = []
