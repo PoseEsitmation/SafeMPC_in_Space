@@ -208,6 +208,9 @@ class MonitorBase():
                 self.val_stats[i]['nll'].append(val_nll.item())
                 self.val_stats[i]['diff'].append(val_diff.mean().item())
 
+                self.writer.add_scalar(f'val/task_{i}/loss', val_nll.item(), self.train_iter)
+                self.writer.add_scalar(f'val/task_{i}/diff', val_diff.mean().item(), self.train_iter)
+
             self.model.train()
             # Other Sfuff
             # self.btest.plot()
