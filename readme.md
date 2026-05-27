@@ -55,4 +55,6 @@ python main.py run --method hnet --env half_cheetah_body --device cuda:0 --seed 
 
 # Replay a trained checkpoint
 python main.py run --method ewc --env cartpole --play
+# Keep Out of danger zone
+python main.py run --method hnet --env half_cheetah_safe --device cpu
 ```
