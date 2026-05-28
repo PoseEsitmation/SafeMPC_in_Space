@@ -25,7 +25,7 @@ Rots = [[0, 0, 0], [0, 10, 0], [0, 20, 0], [0, 30, 0],
         [0, -20, 10]]
 
 CHEETAH_ENVS = ['MBRLHalfCheetah-v0', 'HalfCheetahBigTorso-v0', 'HalfCheetahBigThigh-v0',
-                'HalfCheetahBigLeg-v0', 'HalfCheetahBigFoot-v0']
+                'HalfCheetahBigLeg-v0', 'HalfCheetahBigFoot-v0', 'HalfCheetah-v4']
 WALKER_ENVS = ['MBRLWalker-v0', 'Walker2dBigTorso-v0', 'Walker2dBigThigh-v0',
                'Walker2dBigLeg-v0', 'Walker2dBigFoot-v0']
 HOPPER_ENVS = ['MBRLHopper-v0', 'HopperBigTorso-v0', 'HopperBigThigh-v0',
