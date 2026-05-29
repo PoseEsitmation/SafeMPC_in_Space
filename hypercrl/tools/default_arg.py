@@ -103,6 +103,50 @@ class Hparams():
         
         return hparams
 
+def default_arg_half_cheetah_safe(hparams):
+    hparams.state_dim = 18
+    hparams.control_dim = 6
+    hparams.out_dim = hparams.state_dim
+
+    # Tasks
+    hparams.num_tasks = 3
+    hparams.max_iteration = 100000          # was 100000 3000 
+    hparams.init_rand_steps = 10000         # was 10000  400
+    hparams.dynamics_update_every = 1000   # was 1000   200
+
+    # Dynamics model
+    hparams.dnn_out = "diff"
+    hparams.normalize_xu = True
+    hparams.h_dims = [256, 256]           # was [200,200,200,200] — smaller = faster
+    hparams.out_var = True               # was True — disables expensive variance head
+
+    hparams.lr = 0.001
+    hparams.lr_steps = None
+    hparams.bs = 100                       # was 100
+    hparams.reg_lambda = 0.00005
+    hparams.train_dynamic_iters = 2000     # was 2000
+    hparams.print_train_every = 500
+    hparams.eval_every = 500              # was 2000
+
+    hparams.eval_env_run_every = 5000      # was 5000
+    hparams.run_eval_env_eps = 1
+    hparams.M = 30                        # was 1000
+
+    # MPC-CEM planner
+    hparams.control = "mpc-cem"
+    hparams.horizon = 25                  # was 30
+    hparams.propagation = "EP"
+    hparams.reward_discount = 0.99
+
+    # CEM — these are the biggest CPU cost
+    hparams.n_sim_steps = 5
+    hparams.n_sim_particles = 400         # was 500
+    hparams.num_cem_elites = 40           # was 50
+
+    hparams.mag_noise = 1
+
+    return hparams
+
 def HP(env, seed=None, save_folder='./runs/lqr'):
     hparams = Hparams()
     hparams.seed = seed if seed is not None else 2020
@@ -130,6 +174,8 @@ def HP(env, seed=None, save_folder='./runs/lqr'):
         return default_arg_hopper(hparams)
     elif env == "humanoid":
         return default_arg_humanoid(hparams)
+    elif env.startswith("half_cheetah_safe"):
+        return default_arg_half_cheetah_safe(hparams)
     elif env.startswith("half_cheetah"):
         return default_arg_half_cheetah(hparams)
     elif env.startswith("inverted_pendulum"):
