@@ -1,7 +1,114 @@
+from __future__ import annotations
+
+from typing import Optional
+
+import cvxpy as cp
 import numpy as np
 import gymnasium as gym
 from gymnasium import utils
 from gymnasium.envs.mujoco import mujoco_env
+
+from hypercrl.control.safety_filter import CBF, CLF, SafetyFilter
+
+
+class HalfCheetahKeepOutCBF(CBF):
+    """Relative-degree-2 extended CBF for x-position keep-out zones.
+
+    For each zone ``[x_min, x_max]`` the barrier is formed depending on
+    which side the cheetah is currently on:
+
+    Left approach (x_pos <= x_min):
+        h_L  = x_min - x_pos       (positive = safe)
+        H_L  = -x_vel + alpha * h_L
+        Ḣ_L  = -ẍ_vel - alpha * x_vel  ≈  -(s @ u) - alpha * x_vel
+
+    Right approach (x_pos >= x_max):
+        h_R  = x_pos - x_max
+        H_R  =  x_vel + alpha * h_R
+        Ḣ_R  =  ẍ_vel + alpha * x_vel  ≈   (s @ u) + alpha * x_vel
+
+    ``s`` is a uniform sensitivity vector approximating how each action
+    dimension contributes to x-acceleration.  Tune ``x_accel_gain`` or
+    replace ``H_dot_expr`` with a proper linearisation from the model.
+    """
+
+    def __init__(
+        self,
+        env: "HalfCheetahSafeEnv",
+        alpha: float = 1.0,
+        x_accel_gain: float = 0.5,
+    ) -> None:
+        self._env = env
+        self.alpha = alpha
+        self.x_accel_gain = x_accel_gain
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _x_pos(self) -> float:
+        return float(self._env.data.qpos[0])
+
+    def _pick_active_barrier(self, x_pos: float, x_vel: float):
+        """Return (H_value, side) for the most constraining zone.
+
+        ``side`` is ``'left'``, ``'right'``, or ``None`` (no zones).
+        """
+        zones = self._env.keep_out_zones
+        if not zones:
+            return float("inf"), None
+
+        min_H = float("inf")
+        active_side = None
+
+        for x_min, x_max in zones:
+            if x_pos <= x_min:
+                H = -x_vel + self.alpha * (x_min - x_pos)
+                side = "left"
+            elif x_pos >= x_max:
+                H = x_vel + self.alpha * (x_pos - x_max)
+                side = "right"
+            else:
+                # Inside zone: choose the boundary we are closer to.
+                if (x_pos - x_min) <= (x_max - x_pos):
+                    H = -x_vel + self.alpha * (x_min - x_pos)  # negative
+                    side = "left"
+                else:
+                    H = x_vel + self.alpha * (x_pos - x_max)   # negative
+                    side = "right"
+
+            if H < min_H:
+                min_H = H
+                active_side = side
+
+        return min_H, active_side
+
+    # ------------------------------------------------------------------
+    # CBF interface
+    # ------------------------------------------------------------------
+
+    def H(self, state: np.ndarray) -> float:
+        x_vel = float(state[0])
+        h_val, _ = self._pick_active_barrier(self._x_pos(), x_vel)
+        return h_val
+
+    def H_dot_expr(self, state: np.ndarray, u_var: cp.Variable) -> cp.Expression:
+        x_vel = float(state[0])
+        _, side = self._pick_active_barrier(self._x_pos(), x_vel)
+
+        if side is None:
+            # No keep-out zones — trivially satisfied.
+            return cp.Constant(1.0)
+
+        n_act = u_var.shape[0]
+        s = np.full(n_act, self.x_accel_gain / n_act)
+
+        if side == "left":
+            # Ḣ_L ≈ -(s @ u) - alpha * x_vel
+            return -(s @ u_var) - self.alpha * x_vel
+        else:
+            # Ḣ_R ≈  (s @ u) + alpha * x_vel
+            return (s @ u_var) + self.alpha * x_vel
 
 
 class HalfCheetahSafeEnv(mujoco_env.MujocoEnv, utils.EzPickle):
@@ -99,3 +206,37 @@ class HalfCheetahSafeEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         self.set_state(qpos, qvel)
         self.xposbefore = np.copy(self.data.qpos[0])
         return self._get_obs()
+
+    # ------------------------------------------------------------------
+    # Safety filter interface
+    # ------------------------------------------------------------------
+
+    def get_cbf(self, alpha: float = 1.0, x_accel_gain: float = 0.5) -> Optional[HalfCheetahKeepOutCBF]:
+        """Return a CBF for the current keep-out zones, or None if there are none."""
+        if not self.keep_out_zones:
+            return None
+        return HalfCheetahKeepOutCBF(self, alpha=alpha, x_accel_gain=x_accel_gain)
+
+    def get_clf(self) -> None:
+        """CLF not yet defined for HalfCheetah; returns None (filter runs CBF-only)."""
+        return None
+
+    def get_safety_filter(
+        self,
+        cbf_epsilon: float = 0.0,
+        clf_rho: float = 1e3,
+        alpha: float = 1.0,
+        x_accel_gain: float = 0.5,
+    ) -> Optional[SafetyFilter]:
+        """Convenience constructor: returns a ready-to-use SafetyFilter or None."""
+        cbf = self.get_cbf(alpha=alpha, x_accel_gain=x_accel_gain)
+        if cbf is None:
+            return None
+        return SafetyFilter(
+            cbf=cbf,
+            clf=self.get_clf(),
+            u_max=1.0,
+            control_dim=self.action_space.shape[0],
+            cbf_epsilon=cbf_epsilon,
+            clf_rho=clf_rho,
+        )
