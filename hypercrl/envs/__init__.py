@@ -1,5 +1,6 @@
 from gymnasium.envs.registration import register
 from .lqr import LQR_2DCar, LQR_HARD
+from .sat_env import SatDynEnv
 try:
     from .mujoco import *
 except Exception:
@@ -118,6 +119,11 @@ register(
     reward_threshold=None,
     max_episode_steps=200,
     kwargs=dict(length=0.5)
+)
+
+register(
+    id='SatDynEnv-v0',
+    entry_point='hypercrl.envs.sat_env:SatDynEnv',
 )
 
 register(

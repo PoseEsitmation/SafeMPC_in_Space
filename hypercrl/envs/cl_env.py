@@ -93,6 +93,7 @@ class EnvSpecs():
         "lqr10": 20,
         "door": 3,
         "door_pose": 7,
+        "sat": 3,
     }
 
     x_dims = {
@@ -108,6 +109,7 @@ class EnvSpecs():
         "lqr10": 20,
         "door": 4,
         "door_pose": 10,
+        "sat": 13,
     }
 
     @classmethod
@@ -246,6 +248,9 @@ class CLEnvHandler():
                                  default_controller="OSC_POSE"),
                              pose_control=True, has_renderer=render)
             env = GymWrapper(env)
+        elif self.cl_env == "sat":
+            from .sat_env import SatDynEnv
+            env = SatDynEnv()
         if not self.cl_env.startswith("lqr"):
             if hasattr(env, 'seed'):
                 env.seed(self.seed)
