@@ -154,6 +154,8 @@ def HP(env, seed=None, save_folder='./runs/lqr'):
         return default_arg_pusher_rot(hparams)
     elif env == "pusher_slide":
         return default_arg_pusher_slide(hparams)
+    elif env == "sat":
+        return default_arg_sat(hparams)
 
 def default_arg_metaworld10(hparams):
     hparams.state_dim = 9
@@ -942,5 +944,54 @@ def default_arg_door_pose(hparams):
     hparams.pddm_beta = 0.6
     hparams.pddm_kappa = 50
     hparams.mag_noise = 0.5
+
+    return hparams
+
+def default_arg_sat(hparams):
+    hparams.state_dim = 13
+    hparams.control_dim = 3
+    hparams.out_dim = hparams.state_dim
+
+    # Tasks
+    hparams.num_tasks = 1
+    hparams.init_rand_steps = 1000
+    hparams.max_iteration = 50000
+    hparams.dynamics_update_every = 1000
+
+    # Common Dynamics Model
+    hparams.dnn_out = "diff"
+    hparams.normalize_xu = True
+    hparams.h_dims = [256, 256]
+    hparams.out_var = False
+
+    hparams.lr = 0.001
+    hparams.lr_steps = None
+    hparams.bs = 100
+    hparams.reg_lambda = 0.0001
+    hparams.train_dynamic_iters = 2000
+    hparams.eval_every = 2000
+
+    # Size of inducing points
+    hparams.M = 400
+
+    # RL Eval setting
+    hparams.eval_env_run_every = 5000
+    hparams.run_eval_env_eps = 3
+
+    # RL Planning
+    hparams.control = "mpc-cem"
+    hparams.horizon = 15
+    hparams.propagation = "EP"
+    hparams.reward_discount = 0.99
+
+    # CEM
+    hparams.n_sim_steps = 5
+    hparams.n_sim_particles = 500
+    hparams.num_cem_elites = 50
+
+    # PDDM
+    hparams.pddm_beta = 0.7
+    hparams.pddm_kappa = 20
+    hparams.mag_noise = 1.0
 
     return hparams
