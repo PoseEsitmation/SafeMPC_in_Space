@@ -62,6 +62,13 @@ ROTATE_ENV = [[[0., -0.02, 0.84029956], [0.70710678118, 0, 0, 0.70710678118],  #
                [0.02, 0., 0.84029956], [0, 0, 0, 0]]]
 SLIDE_ENV = [0.001, 0.0005, 0.002, 0.0026, 0.005]
 
+SAT_PRESETS = {
+    "sat":       {},
+    "sat_easy":  {"angle_bound_lower": 10,  "angle_bound_upper": 45},
+    "sat_hard":  {"angle_bound_lower": 90,  "angle_bound_upper": 180, "beta": 50, "alpha": 100},
+    "sat_weak":  {"scale_torque": 0.5},
+}
+
 
 class EnvSpecs():
     unit = {
@@ -93,7 +100,11 @@ class EnvSpecs():
         "lqr10": 20,
         "door": 3,
         "door_pose": 7,
-        "sat": 3,
+        # action dims
+        **{name: 3  for name in SAT_PRESETS},
+
+
+
     }
 
     x_dims = {
@@ -109,7 +120,8 @@ class EnvSpecs():
         "lqr10": 20,
         "door": 4,
         "door_pose": 10,
-        "sat": 13,
+        # obs dims  
+        **{name: 13 for name in SAT_PRESETS},
     }
 
     @classmethod
@@ -248,12 +260,13 @@ class CLEnvHandler():
                                  default_controller="OSC_POSE"),
                              pose_control=True, has_renderer=render)
             env = GymWrapper(env)
-        elif self.cl_env == "sat":
+        elif self.cl_env in SAT_PRESETS:
             from .sat_env import SatDynEnv
-            env = SatDynEnv()
+            env = SatDynEnv(**SAT_PRESETS[self.cl_env])
         if not self.cl_env.startswith("lqr"):
             if hasattr(env, 'seed'):
                 env.seed(self.seed)
+
 
         if not replica:
             self._envs.append(env)

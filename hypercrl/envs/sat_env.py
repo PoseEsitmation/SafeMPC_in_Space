@@ -28,14 +28,15 @@ from .subfunctions_att_constraints import generate_avoid_vector_in_i_for_1Fzone_
 deg2rad = np.pi / 180
 rad2deg = 180 / np.pi
 
-scale_torque = 2        # [Nm]  max torque per axis
+scale_torque = 2        # [Nm]  max torque per axis aka maximaler Drehmoment einer Achse
 torque_max   = scale_torque * np.sqrt(3)
 scale_omega  = 5        # [rad/s]  observation normalisation
 
+#target attitude
 q_desired_array_global    = np.array([1.0, 0.0, 0.0, 0.0])
 omega_desired_array_global = np.array([0.0, 0.0, 0.0])     # [rad/s]
 
-boresight_vector_in_b_global = np.array([1.0, 0.0, 0.0])   # instrument boresight in body frame
+boresight_vector_in_b_global = np.array([1.0, 0.0, 0.0])   # instrument boresight in body frame Sichtlinie, Peilrichtung oder Mittelachse
 
 time_per_step    = 0.1    # [s]
 time_per_episode = 100    # [s]
@@ -44,7 +45,7 @@ time_per_episode = 100    # [s]
 angle_bound_lower = 80
 angle_bound_upper = 180
 
-# F-zone placement parameters (exponential-map method)
+# F-zone placement parameters (exponential-map method) aka Keep out Zone geometry
 vector_rotation_angle1_ratio_low  = 0.5
 vector_rotation_angle1_ratio_high = 0.5
 vector_rotation_angle2_low  = 0.0   # [deg]
@@ -179,8 +180,18 @@ class SatDynEnv(gym.Env):
     Action (shape=(3,)):  normalised torques in [-1, 1]
     """
 
-    def __init__(self):
+    def __init__(self, angle_bound_lower=80, angle_bound_upper=180,
+             beta=10, alpha=66, scale_torque=2,
+             time_per_episode=100, time_per_step=0.1):
         super().__init__()
+        self._angle_bound_lower = angle_bound_lower  # smallest starting angle error in degrees
+        self._angle_bound_upper = angle_bound_upper  # largest starting angle error in degrees
+        self._beta              = beta               # how much the satellite is punished for entering the keep-out zone
+        self._alpha             = alpha              # how quickly the punishment grows near the keep-out zone edge
+        self._scale_torque      = scale_torque       # maximum force the thrusters can apply per axis in Nm
+        # replace the globals where used:
+        # angle_bound_lower → self._angle_bound_lower  (in reset)
+        # beta/alpha        → self._beta / self._alpha  (in reward_function_with_Fzone)
 
         self.action_space = spaces.Box(low=-1, high=1, shape=(3,), dtype=np.float32)
 
@@ -206,7 +217,7 @@ class SatDynEnv(gym.Env):
         self.q_desired_array   = q_desired_array_global.copy()
         self.omega_desired_array = omega_desired_array_global.copy()
 
-        self.inertia = np.array([
+        self.inertia = np.array([ #intertia tensor aka Massenträgheitsverteilung im Raum -> currently asymmetric
             [60,  5,  1],
             [ 5, 50,  2],
             [ 1,  2, 70],

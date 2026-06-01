@@ -197,7 +197,7 @@ class GTCost():
             reward_doorknob = torch.abs(x[:, -1]) * 20
             cost = -reward_door - reward_doorknob - \
                 reward_ori - reward_dist - reward_log_dist
-        elif self.env_name == "sat":
+        elif self.env_name == "sat" or self.env_name.startswith("sat_"): #taken from the sat_env.py reward
             # x[:, 0] = qe_0 (error quaternion scalar, >=0 by convention)
             qe_0 = torch.clamp(x[:, 0], -1.0, 1.0)
             err_phi = 2.0 * torch.acos(qe_0)
