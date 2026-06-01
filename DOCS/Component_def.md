@@ -107,14 +107,21 @@
 ## Components to adapt
 
 ### `EnvSpecs` (`envs/cl_env.py`)
-- add: `x_dims["spacecraft"] = 6`, `a_dims["spacecraft"] = 3`
+- add: `x_dims["spacecraft"] = 3`, `a_dims["spacecraft"] = 3`
+
+- added: `x_dims["spaceEnv*"] = 13`, `a_dims["spaceEnv*"] = 3` via SPACE_ENV_PRESETS
 
 ### `GTCost` (`control/reward.py`)
 - add `"spacecraft"` case: quadratic distance to goal + control effort penalty
 
+- added `"spaceEnv"` case: attitude error reward + KOZ penalty + torque penalty
+
 ### `CLEnvHandler` (`envs/cl_env.py`)
 - add `"spacecraft"` branch in `add_task()`
 - on task transition: call `env.get_cbf()` and `env.get_clf()` to rebuild filter
+
+- added `SPACE_ENV_PRESETS` branch in `add_task()`
+- named presets: `spaceEnv`, `spaceEnv_easy`, `spaceEnv_hard`, `spaceEnv_weak`
 
 ### Reward function
 - soft obstacle penalty to reduce filter intervention rate during training
@@ -123,5 +130,8 @@
 - `step()`: returns 4-tuple `(obs (6,), reward, done, info)`
 - `reset()`: returns `x_0 (6,)` — no args today; planned: accept `task_id`
 
-### Evaluator / logger
+### Evaluator / logger (`tools/tools.py`)
 - add: CBF violation count, filter intervention rate, reward with/without filter
+
+- added `koz_violations` counter, logged per episode to TensorBoard
+
