@@ -170,6 +170,7 @@ class HalfCheetahSafeEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         reward_run  = (xposafter - self.xposbefore) / self.dt
 
         if self._in_keep_out_zone(xposafter):
+            print(f"[KeepOut] violation at x={xposafter:.3f}  zones={self.keep_out_zones}")
             reward     = -self.penalty
             terminated = True
             info = dict(

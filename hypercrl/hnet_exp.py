@@ -450,7 +450,9 @@ def run(hparams):
     for task_id in range(num_tasks_seen, hparams.num_tasks):
         # New Task with different friction
         env = envs.add_task(task_id, render=getattr(hparams, 'render', False))
-        
+        if hasattr(env, 'get_safety_filter'):
+            agent.set_safety_filter(env.get_safety_filter())
+
         print(f"Collecting some random data first for task {task_id}")
         x_t, _ = env.reset()
         for it in range(hparams.init_rand_steps):

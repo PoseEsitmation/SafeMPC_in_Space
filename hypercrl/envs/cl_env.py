@@ -29,9 +29,9 @@ Rots = [[0, 0, 0], [0, 10, 0], [0, 20, 0], [0, 30, 0],
 CHEETAH_ENVS = ['MBRLHalfCheetah-v0', 'HalfCheetahBigTorso-v0', 'HalfCheetahBigThigh-v0',
                 'HalfCheetahBigLeg-v0', 'HalfCheetahBigFoot-v0']
 HALF_CHEETAH_SAFE_ENVS = [
-    lambda: HalfCheetahSafeEnv(keep_out_zones=[(1.0, 2.0)]),  # Task 0
-    lambda: HalfCheetahSafeEnv(keep_out_zones=[(3.0, 4.0)]),  # Task 1
-    lambda: HalfCheetahSafeEnv(keep_out_zones=[(5.0, 6.0)]),  # Task 2
+    lambda render_mode=None: HalfCheetahSafeEnv(keep_out_zones=[(1.0, 2.0)], render_mode=render_mode),  # Task 0
+    lambda render_mode=None: HalfCheetahSafeEnv(keep_out_zones=[(3.0, 4.0)], render_mode=render_mode),  # Task 1
+    lambda render_mode=None: HalfCheetahSafeEnv(keep_out_zones=[(5.0, 6.0)], render_mode=render_mode),  # Task 2
 ]
 WALKER_ENVS = ['MBRLWalker-v0', 'Walker2dBigTorso-v0', 'Walker2dBigThigh-v0',
                'Walker2dBigLeg-v0', 'Walker2dBigFoot-v0']
@@ -92,6 +92,7 @@ class EnvSpecs():
         'pusher_rot': 2,
         "pusher_slide": 2,
         "reacher": 2,
+        "half_cheetah": 6,
         "half_cheetah_body": 6,
         "half_cheetah_safe": 6,
         "cartpole": 1,
@@ -108,6 +109,7 @@ class EnvSpecs():
         "pusher_rot": 20,
         "pusher_slide": 18,
         "reacher": 11,
+        "half_cheetah": 18,
         "half_cheetah_body": 18,
         "half_cheetah_safe": 18,
         "cartpole": 4,
@@ -199,7 +201,7 @@ class CLEnvHandler():
             env = gym.make(CHEETAH_ENVS[task_id],
                            render_mode="human" if render else None)
         elif self.cl_env == "half_cheetah_safe":
-              env = HALF_CHEETAH_SAFE_ENVS[task_id]()
+            env = HALF_CHEETAH_SAFE_ENVS[task_id](render_mode="human" if render else None)
         elif self.cl_env == "half_cheetah":
             env = gym.make('MBRLHalfCheetah-v0',
                            render_mode="human" if render else None)

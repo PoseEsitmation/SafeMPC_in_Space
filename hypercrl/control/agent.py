@@ -162,7 +162,7 @@ class MPC(Agent):
         if self.env_name.startswith("inverted_pendulum") or self.env_name.startswith("cartpole"):
             x = torch.cat((x[:, 0:1], torch.cos(x[:, 1:2]),
                           torch.sin(x[:, 1:2]), x[:, 2:]), dim=-1)
-        elif self.env_name in ["half_cheetah_body", "hopper"]:
+        elif self.env_name in ["half_cheetah_body", "half_cheetah_safe", "hopper"]:
             x = torch.cat((x[:, 1:2], torch.cos(x[:, 2:3]),
                           torch.sin(x[:, 2:3]), x[:, 3:]), dim=-1)
         elif self.env_name == "door":
@@ -217,7 +217,7 @@ class MPC(Agent):
             xx = xx * self.x_std + self.x_mu
 
         # Compensate diff
-        if self.env_name in ["half_cheetah_body", "hopper"] and self.dnn_out == "diff":
+        if self.env_name in ["half_cheetah_body", "half_cheetah_safe", "hopper"] and self.dnn_out == "diff":
             xx = torch.cat((xx[:, 0:1], xcopy[:, 1:] + xx[:, 1:]), dim=-1)
         elif self.env_name == "door_pose" and self.dnn_out == "diff":
             xx = torch.cat((
