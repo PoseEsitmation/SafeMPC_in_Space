@@ -62,12 +62,20 @@ ROTATE_ENV = [[[0., -0.02, 0.84029956], [0.70710678118, 0, 0, 0.70710678118],  #
                [0.02, 0., 0.84029956], [0, 0, 0, 0]]]
 SLIDE_ENV = [0.001, 0.0005, 0.002, 0.0026, 0.005]
 
-SAT_PRESETS = {
-    "sat":       {},
-    "sat_easy":  {"angle_bound_lower": 10,  "angle_bound_upper": 45},
-    "sat_hard":  {"angle_bound_lower": 90,  "angle_bound_upper": 180, "beta": 50, "alpha": 100},
-    "sat_weak":  {"scale_torque": 0.5},
+SPACE_ENV_PRESETS = {
+    # default: large starting error (80–180°), full torque, standard KOZ penalty
+    "spaceEnv":       {},
+
+    # easy: small starting error (10–45°)
+    "spaceEnv_easy":  {"angle_bound_lower": 10,  "angle_bound_upper": 45},
+
+    # hard: large starting error + 5x stronger KOZ penalty
+    "spaceEnv_hard":  {"angle_bound_lower": 90,  "angle_bound_upper": 180, "beta": 50, "alpha": 100},
+
+    # weak: half thruster power (0.5 Nm), simulates a low-power spacecraft
+    "spaceEnv_weak":  {"scale_torque": 0.5},
 }
+
 
 
 class EnvSpecs():
@@ -101,7 +109,7 @@ class EnvSpecs():
         "door": 3,
         "door_pose": 7,
         # action dims
-        **{name: 3  for name in SAT_PRESETS},
+        **{name: 3  for name in SPACE_ENV_PRESETS},
 
 
 
@@ -121,7 +129,7 @@ class EnvSpecs():
         "door": 4,
         "door_pose": 10,
         # obs dims  
-        **{name: 13 for name in SAT_PRESETS},
+        **{name: 13 for name in SPACE_ENV_PRESETS},
     }
 
     @classmethod
@@ -260,9 +268,9 @@ class CLEnvHandler():
                                  default_controller="OSC_POSE"),
                              pose_control=True, has_renderer=render)
             env = GymWrapper(env)
-        elif self.cl_env in SAT_PRESETS:
+        elif self.cl_env in SPACE_ENV_PRESETS:
             from .sat_env import SatDynEnv
-            env = SatDynEnv(**SAT_PRESETS[self.cl_env])
+            env = SatDynEnv(**SPACE_ENV_PRESETS[self.cl_env])
         if not self.cl_env.startswith("lqr"):
             if hasattr(env, 'seed'):
                 env.seed(self.seed)

@@ -310,6 +310,7 @@ class MonitorRL(MonitorBase):
         self.rl_stats = [{"step": [], "reward": [], "time": [],
                           "diff": []} for _ in range(self.num_envs)]
         self.rewards = []
+        self.koz_violations = 0  # KOZ violation counter, reset each episode
 
         self.eval_envs = CLEnvHandler(hparams.env, hparams.seed)
         for task_id in range(hparams.num_tasks):
@@ -318,6 +319,12 @@ class MonitorRL(MonitorBase):
     def env_step(self, state, reward, done, info, task_id):
         self.env_iter += 1
         self.rewards.append(reward)
+
+        # state[7] is the normalized angular margin to the keep-out zone boundary;
+        # below -1/3 means the boresight crossed into the forbidden zone (violation)
+        if self.hparams.env.startswith("spaceEnv") and state[7] < -1/3:
+            self.koz_violations += 1
+
         if done:
             eprew = sum(self.rewards)
             eplen = len(self.rewards)

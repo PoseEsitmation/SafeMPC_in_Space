@@ -144,9 +144,12 @@ def reward_function_with_Fzone(state, action):
     torque_change = np.linalg.norm(action - reward_function_with_Fzone.action_prev) * scale_torque
     reward_function_with_Fzone.action_prev = action.copy()
 
+
+    # penalise keep-out zone violations: full penalty when inside (margin <= 0),
+    # exponentially decaying penalty when close but still outside
     theta_margin = state[7]
     beta, alpha  = 10, 66
-    if theta_margin <= 0:
+    if theta_margin <= 0: #violation condition
         penalty_f_zone = beta
     else:
         penalty_f_zone = beta * math.exp(-alpha * theta_margin)
@@ -360,12 +363,13 @@ class SatDynEnv(gym.Env):
     # ------------------------------------------------------------------
 
     def _normalise(self):
-        q_e_norm          = self.state[:4]
-        omega_norm        = self.state[4:7] / scale_omega
-        theta_margin_norm = -1 + (self.state[7] + np.pi/2) * 4 / (3*np.pi)
-        theta_norm        = -1 + self.state[8] * 2 / np.pi
-        rel_avoid_norm    = self.state[9:12]
-        qe0_prev_norm     = self.state[12]
+        q_e_norm          = self.state[:4]              # quaternion error stays as-is, already in [-1, 1]
+        omega_norm        = self.state[4:7] / scale_omega   # scale angular rate to [-1, 1] using max expected rate
+        theta_margin_norm = -1 + (self.state[7] + np.pi/2) * 4 / (3*np.pi)  # maps [-π/2, π] → [-1, 1]; zero crossing at -1/3 marks KOZ boundary
+        theta_norm        = -1 + self.state[8] * 2 / np.pi  # maps [0, π] → [-1, 1]
+        rel_avoid_norm    = self.state[9:12]            # unit vector, already in [-1, 1]
+        qe0_prev_norm     = self.state[12]              # previous scalar quaternion, already in [-1, 1]
+
 
         return np.concatenate((
             q_e_norm, omega_norm,

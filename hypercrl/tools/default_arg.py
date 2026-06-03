@@ -154,7 +154,7 @@ def HP(env, seed=None, save_folder='./runs/lqr'):
         return default_arg_pusher_rot(hparams)
     elif env == "pusher_slide":
         return default_arg_pusher_slide(hparams)
-    elif env == "sat" or env.startswith("sat_"):
+    elif env == "spaceEnv" or env.startswith("spaceEnv_"):
         return default_arg_sat(hparams)
 
 def default_arg_metaworld10(hparams):

@@ -122,7 +122,7 @@ register(
 )
 
 register(
-    id='SatDynEnv-v0',
+    id='SpaceEnv-v0',
     entry_point='hypercrl.envs.sat_env:SatDynEnv',
 )
 
