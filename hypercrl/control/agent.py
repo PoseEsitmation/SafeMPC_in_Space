@@ -322,7 +322,8 @@ class SafeAgent(Agent):
             state.detach().cpu().numpy() if isinstance(state, torch.Tensor) else state
         )
         u_np: np.ndarray = u_proposed.detach().cpu().numpy()
-        return self.safety_filter.filter(state_np, u_np)
+        u_safe = self.safety_filter.filter(state_np, u_np)
+        return torch.from_numpy(u_safe).to(u_proposed)
 
 
 class RollOut:

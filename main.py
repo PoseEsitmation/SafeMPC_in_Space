@@ -1,6 +1,12 @@
 import argparse
+import logging
 import hypercrl
 import torch
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s  %(name)s  %(message)s",
+)
 
 
 # ============================================================

@@ -93,6 +93,11 @@ class SafetyFilter:
         self.cbf_epsilon = cbf_epsilon
         self.clf_rho = clf_rho
 
+        # Populated after every filter() call; read by the monitor for TensorBoard.
+        self.last_H: float = float("nan")
+        self.last_V: float = float("nan")
+        self.last_was_active: bool = False
+
     def filter(self, state: np.ndarray, u_proposed: np.ndarray) -> np.ndarray:
         """Return the safe action closest (in L2) to u_proposed.
 
@@ -127,11 +132,16 @@ class SafetyFilter:
         else:
             objective = cp.Minimize(cp.sum_squares(u - u_ref))
 
+        self.last_H = float(self.cbf.H(state))
+        self.last_V = float(self.clf.V(state)) if self.clf is not None else float("nan")
+
         prob = cp.Problem(objective, constraints)
         try:
             prob.solve(solver=cp.OSQP, warm_start=True)
             if prob.status in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE) and u.value is not None:
-                return u.value.astype(np.float64)
+                u_safe = u.value.astype(np.float64)
+                self.last_was_active = float(np.linalg.norm(u_safe - u_ref)) > 1e-4
+                return u_safe
         except Exception as exc:
             logger.warning("SafetyFilter QP exception: %s", exc)
 
@@ -139,4 +149,5 @@ class SafetyFilter:
             "SafetyFilter: solver status=%s — returning u_proposed unchanged",
             getattr(prob, "status", "unknown"),
         )
+        self.last_was_active = False
         return u_proposed.copy()

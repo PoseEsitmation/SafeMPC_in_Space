@@ -29,9 +29,9 @@ Rots = [[0, 0, 0], [0, 10, 0], [0, 20, 0], [0, 30, 0],
 CHEETAH_ENVS = ['MBRLHalfCheetah-v0', 'HalfCheetahBigTorso-v0', 'HalfCheetahBigThigh-v0',
                 'HalfCheetahBigLeg-v0', 'HalfCheetahBigFoot-v0']
 HALF_CHEETAH_SAFE_ENVS = [
-    lambda render_mode=None: HalfCheetahSafeEnv(keep_out_zones=[(1.0, 2.0)], render_mode=render_mode),  # Task 0
-    lambda render_mode=None: HalfCheetahSafeEnv(keep_out_zones=[(3.0, 4.0)], render_mode=render_mode),  # Task 1
-    lambda render_mode=None: HalfCheetahSafeEnv(keep_out_zones=[(5.0, 6.0)], render_mode=render_mode),  # Task 2
+    lambda render_mode=None: HalfCheetahSafeEnv(keep_out_zones=[(1.25, 1.75)], render_mode=render_mode),  # Task 0
+    lambda render_mode=None: HalfCheetahSafeEnv(keep_out_zones=[(3.25, 3.75)], render_mode=render_mode),  # Task 1
+    lambda render_mode=None: HalfCheetahSafeEnv(keep_out_zones=[(5.25, 5.75)], render_mode=render_mode),  # Task 2
 ]
 WALKER_ENVS = ['MBRLWalker-v0', 'Walker2dBigTorso-v0', 'Walker2dBigThigh-v0',
                'Walker2dBigLeg-v0', 'Walker2dBigFoot-v0']

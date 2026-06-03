@@ -329,12 +329,46 @@ class MonitorRL(MonitorBase):
                 f"Step: {self.env_iter}, Reward: {eprew:.3f}, Episode Length {eplen}")
             self.rewards = []
 
+        self._log_safety(info, task_id)
+
         if self.env_iter % self.eval_env_run_every == 0:
             self.run_eval_env(task_id)
 
         # Log dataset norm statistic
         if self.env_iter % self.eval_env_run_every == 0:
             self.log_xu_norm(task_id)
+
+    def _log_safety(self, info: dict, task_id: int) -> None:
+        """Log CBF, CLF, and keep-out zone metrics to TensorBoard every step."""
+        prefix = f'safety/task_{task_id}'
+
+        # Keep-out zone data (always present when env is HalfCheetahSafeEnv)
+        if 'keep_out_violation' in info:
+            self.writer.add_scalar(
+                f'{prefix}/keepout_violation',
+                float(info['keep_out_violation']),
+                self.env_iter,
+            )
+        if 'min_zone_dist' in info:
+            self.writer.add_scalar(
+                f'{prefix}/min_zone_dist',
+                float(info['min_zone_dist']),
+                self.env_iter,
+            )
+
+        # CBF / CLF values from the safety filter (SafeAgent only)
+        sf = getattr(getattr(self, 'agent', None), 'safety_filter', None)
+        if sf is not None:
+            import math
+            if not math.isnan(sf.last_H):
+                self.writer.add_scalar(f'{prefix}/cbf_H', sf.last_H, self.env_iter)
+            if not math.isnan(sf.last_V):
+                self.writer.add_scalar(f'{prefix}/clf_V', sf.last_V, self.env_iter)
+            self.writer.add_scalar(
+                f'{prefix}/filter_active',
+                float(sf.last_was_active),
+                self.env_iter,
+            )
 
     def log_xu_norm(self, task_id):
         if self.hparams.normalize_xu == False:

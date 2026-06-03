@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 import cvxpy as cp
+import mujoco
 import numpy as np
 import gymnasium as gym
 from gymnasium import utils
 from gymnasium.envs.mujoco import mujoco_env
 
 from hypercrl.control.safety_filter import CBF, CLF, SafetyFilter
+
+logger = logging.getLogger(__name__)
 
 
 class HalfCheetahKeepOutCBF(CBF):
@@ -87,12 +91,20 @@ class HalfCheetahKeepOutCBF(CBF):
     # CBF interface
     # ------------------------------------------------------------------
 
+    def _z_pos(self) -> float:
+        return float(self._env.data.qpos[1])
+
     def H(self, state: np.ndarray) -> float:
+        if self._z_pos() >= self._env.zone_height:
+            return float("inf")  # cheetah has cleared the obstacle
         x_vel = float(state[0])
         h_val, _ = self._pick_active_barrier(self._x_pos(), x_vel)
         return h_val
 
     def H_dot_expr(self, state: np.ndarray, u_var: cp.Variable) -> cp.Expression:
+        if self._z_pos() >= self._env.zone_height:
+            return cp.Constant(1.0)  # above obstacle — no constraint
+
         x_vel = float(state[0])
         _, side = self._pick_active_barrier(self._x_pos(), x_vel)
 
@@ -123,11 +135,14 @@ class HalfCheetahSafeEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         "render_fps": 20,
     }
 
-    def __init__(self, keep_out_zones=None, penalty=100.0, render_mode=None):
-        
+    def __init__(self, keep_out_zones=None, penalty=100.0, forward_reward_weight=1.0,
+                 zone_height=0.7, render_mode=None):
+
          # Store the forbidden zones — if none given, use empty list (no restrictions)
         self.keep_out_zones = keep_out_zones if keep_out_zones is not None else []
         self.penalty = penalty
+        self.forward_reward_weight = forward_reward_weight
+        self.zone_height = zone_height  # torso z below this = inside zone (must jump over)
         # Initialize x-position tracker to None — will be set on first step
         self.xposbefore = None
 
@@ -140,7 +155,8 @@ class HalfCheetahSafeEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         # Initialize EzPickle with the same arguments — required for saving/loading the env
         utils.EzPickle.__init__(
             self, keep_out_zones=keep_out_zones,
-            penalty=penalty, render_mode=render_mode
+            penalty=penalty, forward_reward_weight=forward_reward_weight,
+            zone_height=zone_height, render_mode=render_mode,
         )
 
          # Initialize the MuJoCo base environment
@@ -152,10 +168,10 @@ class HalfCheetahSafeEnv(mujoco_env.MujocoEnv, utils.EzPickle):
             render_mode=render_mode
         )
 
-    def _in_keep_out_zone(self, xpos):
+    def _in_keep_out_zone(self, xpos, zpos):
+        """Violation only when inside the x-range AND below zone_height (not jumped over)."""
         for (x_min, x_max) in self.keep_out_zones:
-            # Check if xpos falls within this zone's boundaries
-            if x_min <= xpos <= x_max:
+            if x_min <= xpos <= x_max and zpos < self.zone_height:
                 return True
         return False
 
@@ -163,21 +179,24 @@ class HalfCheetahSafeEnv(mujoco_env.MujocoEnv, utils.EzPickle):
           # Record the cheetah's x-position BEFORE the action is applied
         self.xposbefore = self.data.qpos[0]
         self.do_simulation(action, self.frame_skip)
-        xposafter = self.data.qpos[0] # Record the cheetah's x-position AFTER the action is applied
+        xposafter = self.data.qpos[0]
+        zposafter = self.data.qpos[1]  # torso height
         ob = self._get_obs()
 
         reward_ctrl = -0.1 * np.square(action).sum()
-        reward_run  = (xposafter - self.xposbefore) / self.dt
+        reward_run  = self.forward_reward_weight * (xposafter - self.xposbefore) / self.dt
 
-        if self._in_keep_out_zone(xposafter):
-            print(f"[KeepOut] violation at x={xposafter:.3f}  zones={self.keep_out_zones}")
+        min_dist = self._min_zone_dist(float(xposafter), float(zposafter))
+
+        if self._in_keep_out_zone(xposafter, zposafter):
             reward     = -self.penalty
             terminated = True
             info = dict(
-                 reward_run=reward_run,        # what running reward would have been
-                reward_ctrl=reward_ctrl,      # what control penalty would have been
-                keep_out_violation=True,      # flag that a violation occurred
-                violated_at=float(xposafter) # exact x-position where violation happened
+                reward_run=reward_run,
+                reward_ctrl=reward_ctrl,
+                keep_out_violation=True,
+                violated_at=float(xposafter),
+                min_zone_dist=0.0,
             )
         else:
             reward     = reward_ctrl + reward_run
@@ -185,10 +204,76 @@ class HalfCheetahSafeEnv(mujoco_env.MujocoEnv, utils.EzPickle):
             info = dict(
                 reward_run=reward_run,
                 reward_ctrl=reward_ctrl,
-                keep_out_violation=False
+                keep_out_violation=False,
+                min_zone_dist=min_dist,
             )
 
         return ob, reward, terminated, False, info
+
+    def _min_zone_dist(self, x_pos: float, z_pos: float) -> float:
+        """Horizontal distance to nearest zone; infinite when cheetah is above zone_height."""
+        if not self.keep_out_zones or z_pos >= self.zone_height:
+            return float("inf")
+        dists = []
+        for x_min, x_max in self.keep_out_zones:
+            if x_pos < x_min:
+                dists.append(x_min - x_pos)
+            elif x_pos > x_max:
+                dists.append(x_pos - x_max)
+            else:
+                dists.append(0.0)
+        return min(dists)
+
+    def render(self):
+        if self.render_mode == "human" and self.keep_out_zones:
+            viewer = self.mujoco_renderer._viewers.get("human")
+            if viewer is not None:
+                self._patch_viewer_if_needed(viewer)
+                self._add_zone_markers(viewer)
+        return super().render()
+
+    def _patch_viewer_if_needed(self, viewer) -> None:
+        """Replace gymnasium's broken _add_marker_to_scene with one that uses mjv_initGeom.
+
+        gymnasium's default implementation sets g.texid which was removed in newer mujoco.
+        """
+        if getattr(viewer, '_zone_marker_patched', False):
+            return
+
+        def _add_marker_to_scene(marker: dict):
+            if viewer.scn.ngeom >= viewer.scn.maxgeom:
+                return
+            g = viewer.scn.geoms[viewer.scn.ngeom]
+            mujoco.mjv_initGeom(
+                g,
+                type=int(marker.get("type", mujoco.mjtGeom.mjGEOM_BOX)),
+                size=np.asarray(marker.get("size", np.ones(3) * 0.1), dtype=np.float64).ravel(),
+                pos=np.asarray(marker.get("pos", np.zeros(3)), dtype=np.float64).ravel(),
+                mat=np.asarray(marker.get("mat", np.eye(3)), dtype=np.float64).ravel(),
+                rgba=np.asarray(marker.get("rgba", np.ones(4)), dtype=np.float32).ravel(),
+            )
+            label = marker.get("label", "")
+            if label:
+                g.label = label
+            viewer.scn.ngeom += 1
+
+        viewer._add_marker_to_scene = _add_marker_to_scene
+        viewer._zone_marker_patched = True
+
+    def _add_zone_markers(self, viewer) -> None:
+        """Queue ground-level red obstacles for every keep-out zone."""
+        half_h = self.zone_height / 2.0
+        for x_min, x_max in self.keep_out_zones:
+            cx = (x_min + x_max) / 2.0
+            half_width = (x_max - x_min) / 2.0
+            viewer.add_marker(
+                type=mujoco.mjtGeom.mjGEOM_BOX,
+                pos=np.array([cx, 0.0, half_h]),
+                size=np.array([half_width, 0.05, half_h]),
+                mat=np.eye(3).flatten(),
+                rgba=np.array([1.0, 0.1, 0.1, 0.5], dtype=np.float32),
+                label=f"zone [{x_min:.1f},{x_max:.1f}]",
+            )
 
     def _get_obs(self):
           # Combine three sources of information into one flat array:
