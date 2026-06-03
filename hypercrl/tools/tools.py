@@ -158,7 +158,14 @@ class MonitorBase():
         if (self.train_iter % self.print_train_every == 0):
             self.train_loss /= self.print_train_every
             self.writer.add_scalar(
-                'train/mse_loss', self.train_loss, self.train_iter)
+                'train/loss', self.train_loss, self.train_iter)
+
+            if self.optimizer is not None:
+                lr = self.optimizer.param_groups[0]['lr']
+                self.writer.add_scalar('train/learning_rate', lr, self.train_iter)
+
+            for task_id, size in enumerate(self.collector.sizes()):
+                self.writer.add_scalar(f'data/task_{task_id}/dataset_size', size, self.train_iter)
 
             print(
                 f"Batch: {self.train_iter}, Loss: {self.train_loss.item():.5f}")
@@ -172,9 +179,9 @@ class MonitorBase():
                     diff += torch.norm(param - self.net_param_ckpt[name], p=2)
 
                 self.writer.add_histogram(
-                    f'train/weight/{name}', param.flatten(), self.train_iter)
+                    f'train/weights/{name}', param.flatten(), self.train_iter)
 
-            self.writer.add_scalar('train/regularizer', diff, self.train_iter)
+            self.writer.add_scalar('train/weight_shift', diff, self.train_iter)
 
         self.train_iter += 1
 
@@ -210,7 +217,7 @@ class MonitorBase():
                 self.val_stats[i]['diff'].append(val_diff.mean().item())
 
                 self.writer.add_scalar(f'val/task_{i}/loss', val_nll.item(), self.train_iter)
-                self.writer.add_scalar(f'val/task_{i}/diff', val_diff.mean().item(), self.train_iter)
+                self.writer.add_scalar(f'val/task_{i}/prediction_error', val_diff.mean().item(), self.train_iter)
 
             self.model.train()
             # Other Sfuff
@@ -329,9 +336,13 @@ class MonitorRL(MonitorBase):
             eprew = sum(self.rewards)
             eplen = len(self.rewards)
             self.writer.add_scalar(
-                f'rl/task_{task_id}/reward', eprew, self.env_iter)
+                f'train_env/task_{task_id}/reward', eprew, self.env_iter)
             self.writer.add_scalar(
-                f'rl/task_{task_id}/ep_len', eplen, self.env_iter)
+                f'train_env/task_{task_id}/episode_length', eplen, self.env_iter)
+            if self.hparams.env.startswith("spaceEnv"):
+                self.writer.add_scalar(
+                    f'train_env/task_{task_id}/koz_violations', self.koz_violations, self.env_iter)
+                self.koz_violations = 0
             print(
                 f"Step: {self.env_iter}, Reward: {eprew:.3f}, Episode Length {eplen}")
             self.rewards = []
@@ -349,13 +360,13 @@ class MonitorRL(MonitorBase):
 
         x_mu, x_std, a_mu, a_std = self.collector.norm(task_id)
         self.writer.add_histogram(
-            f'rl/task_{task_id}/x_mu', x_mu, self.env_iter)
+            f'eval_env/task_{task_id}/state_mean', x_mu, self.env_iter)
         self.writer.add_histogram(
-            f'rl/task_{task_id}/x_std', x_std, self.env_iter)
+            f'eval_env/task_{task_id}/state_std', x_std, self.env_iter)
         self.writer.add_histogram(
-            f'rl/task_{task_id}/a_mu', a_mu, self.env_iter)
+            f'eval_env/task_{task_id}/action_mean', a_mu, self.env_iter)
         self.writer.add_histogram(
-            f'rl/task_{task_id}/a_std', a_std, self.env_iter)
+            f'eval_env/task_{task_id}/action_std', a_std, self.env_iter)
 
     def run_eval_env(self, task_id):
 
@@ -405,7 +416,7 @@ class MonitorRL(MonitorBase):
                 plt.legend()
                 plt.tight_layout()
                 self.writer.add_figure(
-                    f'task_{tid}/rollout', fig, self.env_iter)
+                    f'eval_env/task_{tid}/rollout', fig, self.env_iter)
                 plt.close(fig)
             return gt_states, model_states
 
@@ -432,7 +443,7 @@ class MonitorRL(MonitorBase):
                 'Open Loop Dynamics (averged diff over 10 init states)')
             plt.tight_layout()
             self.writer.add_figure(
-                f'task_{tid}/rollout_avg_diff', fig, self.env_iter)
+                f'eval_env/task_{tid}/rollout_diff', fig, self.env_iter)
             plt.close(fig)
 
         def run_one_eps(env, agent, tid):
@@ -524,6 +535,10 @@ class MonitorRL(MonitorBase):
             # Save for later
             l1_pred_diff = traj_diff[0].mean()
             self.rl_stats[tid]['diff'].append(l1_pred_diff)
+
+            self.writer.add_scalar(f'eval_env/task_{tid}/reward', eprew, self.env_iter)
+            self.writer.add_scalar(f'eval_env/task_{tid}/prediction_error', l1_pred_diff, self.env_iter)
+            self.writer.add_scalar(f'eval_env/task_{tid}/episode_time', mean_time, self.env_iter)
 
             print(f"Task: {tid}, Step: {self.env_iter} Eval reward: {eprew:.3f}, " +
                   f"On-policy Diff: {l1_pred_diff:.5f}, Time Taken {mean_time:.1f}s")

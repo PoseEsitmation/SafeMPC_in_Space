@@ -23,19 +23,19 @@ class MonitorHnet(MonitorRL):
 
             i = self.train_iter
 
-            self.writer.add_scalar('train/mse_loss', self.loss_task, i)
+            self.writer.add_scalar('train/loss', self.loss_task, i)
             self.writer.add_scalar('train/regularizer', self.loss_reg, i)
-            self.writer.add_scalar('train/full_loss', loss_tot, i)
+            self.writer.add_scalar('train/total_loss', loss_tot, i)
             if dTheta is not None:
                 dT_norm = torch.norm(torch.cat([d.view(-1) for d in dTheta]), 2)
-                self.writer.add_scalar('train/dTheta_norm', dT_norm, i)
+                self.writer.add_scalar('train/delta_theta_norm', dT_norm, i)
             if grad_tloss is not None:
                 (grad_tloss, grad_full, grad_diff_norm, grad_cos) = grad_tloss
-                self.writer.add_scalar('train/full_grad_norm',
+                self.writer.add_scalar('train/gradient_norm',
                                   torch.norm(grad_full, 2), i)
-                self.writer.add_scalar('train/reg_grad_norm',
+                self.writer.add_scalar('train/regularizer_gradient_norm',
                                   grad_diff_norm, i)
-                self.writer.add_scalar('train/cosine_task_reg',
+                self.writer.add_scalar('train/gradient_cosine_similarity',
                                   grad_cos, i)
             
             self.loss_task = 0
@@ -43,7 +43,7 @@ class MonitorHnet(MonitorRL):
 
         if (self.train_iter % self.log_hist_every == 0):
             for i, weight in enumerate(weights):
-                self.writer.add_histogram(f'train/weight/{i}', weight.flatten(), self.train_iter)
+                self.writer.add_histogram(f'train/weights/{i}', weight.flatten(), self.train_iter)
         self.train_iter += 1
 
     def data_aggregate_step(self, x_tt, task_id, it):
