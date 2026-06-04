@@ -96,6 +96,7 @@ Click **Scalars** to see training loss and reward curves. TensorBoard refreshes 
 | `eval_env/task_N/prediction_error` | Scalars | How accurately the dynamics model predicts the next state during MPC rollouts — drops as the model improves |
 | `eval_env/task_N/episode_time` | Scalars | Average time in seconds to complete one evaluation episode — reflects MPC planning cost |
 | `train_env/task_N/koz_violations` | Scalars | Number of keep-out zone violations per episode (space environment only) — should go to zero as the agent learns |
+| `train_env/task_N/theta_margin` | Scalars | Distance of the camera to the forbidden zone boundary every step (space environment only) — positive = safe, below -1/3 = violation |
 | `eval_env/task_N/state_mean` | Histograms | Mean (μ = average) of each state dimension across collected data |
 | `eval_env/task_N/state_std` | Histograms | Std (standard deviation = how spread out values are) of each state dimension — grows if agent explores new states |
 | `eval_env/task_N/action_mean` | Histograms | Mean (μ = average) of each action dimension across collected data |

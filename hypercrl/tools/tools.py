@@ -329,8 +329,12 @@ class MonitorRL(MonitorBase):
 
         # state[7] is how far the camera is from the forbidden zone (normalized).
         # positive = safe, zero = at boundary, below -1/3 = camera inside forbidden zone (violation)
-        if self.hparams.env.startswith("spaceEnv") and state[7] < -1/3:
-            self.koz_violations += 1
+        if self.hparams.env.startswith("spaceEnv") and state is not None:
+            self.writer.add_scalar(
+                f'train_env/task_{task_id}/thetha_margin', state[7], self.env_iter)
+            if state[7] < -1/3:
+                self.koz_violations+=1
+            
 
         if done:
             eprew = sum(self.rewards)
