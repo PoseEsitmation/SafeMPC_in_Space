@@ -197,6 +197,23 @@ class GTCost():
             reward_doorknob = torch.abs(x[:, -1]) * 20
             cost = -reward_door - reward_doorknob - \
                 reward_ori - reward_dist - reward_log_dist
+        elif self.env_name == "spaceEnv" or self.env_name.startswith("spaceEnv_"): #taken from the sat_env.py reward
+            # x[:, 0] = qe_0 (error quaternion scalar, >=0 by convention)
+            qe_0 = torch.clamp(x[:, 0], -1.0, 1.0)
+            err_phi = 2.0 * torch.acos(qe_0)
+            attitude_reward = torch.exp(-err_phi / (0.14 * 2.0 * np.pi))
+            # torque penalty (scale_torque=2, torque_max=2*sqrt(3))
+            torque_norm = torch.norm(u * 2.0, p=2, dim=-1) / (2.0 * np.sqrt(3))
+            # KOZ penalty: x[:, 7] = theta_margin_norm, invert normalisation
+            # theta_margin_norm = -1 + (theta_margin + pi/2) * 4 / (3*pi)
+            theta_margin = (x[:, 7] + 1.0) * (3.0 * np.pi / 4.0) - np.pi / 2.0
+            penalty_koz = torch.where(
+                theta_margin <= 0,
+                torch.full_like(theta_margin, 10.0),
+                10.0 * torch.exp(-66.0 * theta_margin),
+            )
+            reward = attitude_reward - 0.05 * torque_norm - penalty_koz
+            cost = -reward
         return cost
 
     def reward(self, x, u, t, task_id):
