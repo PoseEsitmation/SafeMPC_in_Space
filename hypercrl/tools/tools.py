@@ -327,8 +327,8 @@ class MonitorRL(MonitorBase):
         self.env_iter += 1
         self.rewards.append(reward)
 
-        # state[7] is the normalized angular margin to the keep-out zone boundary;
-        # below -1/3 means the boresight crossed into the forbidden zone (violation)
+        # state[7] is how far the camera is from the forbidden zone (normalized).
+        # positive = safe, zero = at boundary, below -1/3 = camera inside forbidden zone (violation)
         if self.hparams.env.startswith("spaceEnv") and state[7] < -1/3:
             self.koz_violations += 1
 

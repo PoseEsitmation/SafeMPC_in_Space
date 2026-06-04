@@ -276,6 +276,9 @@ class SatDynEnv(gym.Env):
             half_angle = 0.0
         else:
             half_angle_max = np.minimum(half_angle_max, 30.0)
+            # KOZ size: randomly sampled between 15° and half_angle_max (capped at 30°).
+            # Increase the lower bound to make the forbidden zone larger (harder),
+            # decrease it to make it smaller (easier).
             half_angle = np.random.uniform(15.0, half_angle_max) * deg2rad
 
         self.f_zone = KeepOutZone(boresight_b, avoid_vec_i, half_angle)
