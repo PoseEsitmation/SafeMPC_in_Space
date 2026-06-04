@@ -82,12 +82,19 @@ Click **Scalars** to see training loss and reward curves. TensorBoard refreshes 
 
 **What is logged:**
 
-| Tag | Description |
-| --- | --- |
-| `train/mse_loss` | Dynamics model training loss |
-| `train/regularizer` | Weight shift between tasks |
-| `rl/task_N/reward` | Episode return during training |
-| `rl/task_N/ep_len` | Episode length during training |
-| `task_N/rollout_avg_diff` | Open-loop prediction error per state dimension |
+| Tag | Tab in TensorBoard | Description |
+| --- | --- | --- |
+| `train/mse_loss` | Scalars | MSE (mean squared error) loss of the dynamics model during training — lower is better |
+| `train/regularizer` | Scalars | How much the network weights changed since the last task — measures forgetting |
+| `val/task_N/loss` | Scalars | Loss on the validation set for task N — how well the model predicts unseen data |
+| `val/task_N/diff` | Scalars | Average absolute prediction error on the validation set for task N |
+| `rl/task_N/reward` | Scalars | Total reward collected in one episode during training — higher is better |
+| `rl/task_N/ep_len` | Scalars | Number of steps the agent survived in one episode |
+| `rl/task_N/x_mu` | Histograms | Mean (μ = average) of each state dimension across collected data |
+| `rl/task_N/x_std` | Histograms | Std (standard deviation = how spread out values are) of each state dimension — grows if agent explores new states |
+| `rl/task_N/a_mu` | Histograms | Mean (μ = average) of each action dimension across collected data |
+| `rl/task_N/a_std` | Histograms | Std (standard deviation = how spread out values are) of each action dimension |
+| `train/weight/*` | Histograms | Distribution of network weights — shows how the model changes over time |
+| `task_N/rollout_avg_diff` | Images | Bar chart of open-loop prediction error per state dimension over the planning horizon |
 
 > **Tip:** Always use `--savepath` with an absolute path in the `tensorboard --logdir` argument to avoid path confusion.
