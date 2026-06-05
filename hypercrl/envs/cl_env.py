@@ -282,7 +282,7 @@ class CLEnvHandler():
                              pose_control=True, has_renderer=render)
             env = GymWrapper(env)
         elif self.cl_env in SPACE_ENV_PRESETS:
-            from .sat_env import SatDynEnv
+            from .space_KOZ import SatDynEnv
             env = SatDynEnv(**SPACE_ENV_PRESETS[self.cl_env])
         if not self.cl_env.startswith("lqr"):
             if hasattr(env, 'seed'):
