@@ -332,6 +332,9 @@ class MonitorRL(MonitorBase):
         if self.hparams.env.startswith("spaceEnv") and state is not None:
             self.writer.add_scalar(
                 f'train_env/task_{task_id}/thetha_margin', state[7], self.env_iter)
+            att_err_deg = 2 * np.degrees(np.arccos(np.clip(np.abs(state[0]), 0.0, 1.0)))
+            self.writer.add_scalar(
+                f'train_env/task_{task_id}/attitude_error_deg', att_err_deg, self.env_iter)
             if state[7] < -1/3:
                 self.koz_violations+=1
             
@@ -492,12 +495,15 @@ class MonitorRL(MonitorBase):
 
             rewards = []
             xs, us = [], []
+            koz_violations = 0
             while (not done):
                 # env.render()
                 u_t = agent.act(x_t, task_id=tid).cpu().numpy()
                 x_tt, reward, terminated, truncated, info = env.step(
                     u_t.reshape(env.action_space.shape))
                 done = terminated or truncated
+                if self.hparams.env.startswith("spaceEnv") and x_tt[7] < -1/3:
+                    koz_violations += 1
                 xs.append(x_t)
                 us.append(u_t)
                 x_t = x_tt
@@ -507,7 +513,7 @@ class MonitorRL(MonitorBase):
             if self.hparams.env == "metaworld10":
                 print(f"Task {env.active_task}, Success {info['success']}")
             tdone = time.time() - ts
-            return eprew, xs, us, tdone
+            return eprew, xs, us, tdone, koz_violations
 
         for tid in range(1 + task_id):
             env = self.eval_envs.get_env(tid)
@@ -525,7 +531,7 @@ class MonitorRL(MonitorBase):
             # Run one evaluation episode using learned policy
             stats = [run_one_eps(env, self.agent, tid)
                      for _ in range(self.run_eval_env_eps)]
-            eprews, xs, us, times = zip(*stats)
+            eprews, xs, us, times, koz_viol_list = zip(*stats)
             eprew = np.mean(eprews)
             mean_time = np.mean(times)
 
@@ -577,6 +583,9 @@ class MonitorRL(MonitorBase):
             self.writer.add_scalar(f'eval_env/task_{tid}/reward', eprew, self.env_iter)
             self.writer.add_scalar(f'eval_env/task_{tid}/prediction_error', l1_pred_diff, self.env_iter)
             self.writer.add_scalar(f'eval_env/task_{tid}/episode_time', mean_time, self.env_iter)
+            if self.hparams.env.startswith("spaceEnv"):
+                self.writer.add_scalar(
+                    f'eval_env/task_{tid}/koz_violations', np.mean(koz_viol_list), self.env_iter)
 
             print(f"Task: {tid}, Step: {self.env_iter} Eval reward: {eprew:.3f}, " +
                   f"On-policy Diff: {l1_pred_diff:.5f}, Time Taken {mean_time:.1f}s")
