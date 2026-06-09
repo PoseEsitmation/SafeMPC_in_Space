@@ -92,7 +92,7 @@ def sat_ode(state, inertia, inertia_inv, torque):
     inertia_inv = inertia_inv.astype(np.float32)
     torque      = torque.astype(np.float32)
 
-    q_quat = state[:4]
+    q_quat = state[:4] # 4D with complex numbers
     omega  = state[4:7]
 
     omega_cross = np.array([
