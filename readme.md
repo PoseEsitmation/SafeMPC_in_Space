@@ -36,10 +36,16 @@ python main.py run --method METHOD --env ENV
 
 | Environment         | Description                       |
 | ------------------- | --------------------------------- |
-| `cartpole`          | Cartpole balancing                |
-| `half_cheetah_body` | Half-cheetah with body variations |
-| `pusher`            | Pusher manipulation task          |
-| `door_pose`         | Door opening task                 |
+| `cartpole`          | Cartpole balancing                                                                               |
+| `half_cheetah_body` | Half-cheetah with body variations                                                                |
+| `pusher`            | Pusher manipulation task                                                                         |
+| `door_pose`         | Door opening task                                                                                |
+| `spaceEnv`          | Satellite attitude control with KOZ — initial error 80°–180°, standard penalty (β=10, α=66)     |
+| `spaceEnv_easy`     | Same as `spaceEnv` but small initial error (10°–45°) — easier slew task                         |
+| `spaceEnv_hard`     | Large initial error (90°–180°) + 5× stronger KOZ penalty (β=50, α=100) — harder constraint task |
+| `spaceEnv_weak`     | Half thruster power (0.5 Nm) — simulates a low-torque spacecraft                                |
+
+> **Tip:** The space environment can be configured by these parameters via constructer arguments.
 
 ### Examples
 
