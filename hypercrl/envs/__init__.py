@@ -1,6 +1,6 @@
 from gymnasium.envs.registration import register
 from .lqr import LQR_2DCar, LQR_HARD
-from .sat_env import SatDynEnv
+from .space_KOZ import SatDynEnv
 try:
     from .mujoco import *
 except Exception:
