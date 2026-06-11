@@ -1,15 +1,6 @@
-"""
-Satellite attitude control environment — Phase 1 (with Keep-Out Zone).
-
-State vector (13,):
-    [qe(4), omega_e(3), theta_margin(1), theta(1), relative_n_avoid_inb(3), qe_0_prev(1)]
-
-Action space (3,):
-    Normalised torques [-1, 1] along body axes, scaled by scale_torque [Nm].
-
-Dependencies:
-    subfunctions_att_constraints.py  (must be in the same directory or on PYTHONPATH)
-"""
+# Satellite attitude control env with Keep-Out Zone (Phase 1).
+# State (13,): [qe(4), omega_e(3), theta_margin(1), theta(1), rel_avoid_in_b(3), qe_0_prev(1)]
+# Action (3,): normalised torques in [-1, 1], scaled by scale_torque [Nm]
 
 import math
 
@@ -21,39 +12,31 @@ from numba import njit
 from .subfunctions_att_constraints import KeepOutZone
 from .subfunctions_att_constraints import generate_avoid_vector_in_i_for_1Fzone_phase1_v2
 
-# ---------------------------------------------------------------------------
-# Physical / simulation constants
-# ---------------------------------------------------------------------------
-
 deg2rad = np.pi / 180
 rad2deg = 180 / np.pi
 
-scale_torque = 2        # [Nm]  max torque per axis aka maximaler Drehmoment einer Achse
+scale_torque = 2        # [Nm] max torque per axis
 torque_max   = scale_torque * np.sqrt(3)
-scale_omega  = 5        # [rad/s]  observation normalisation
+scale_omega  = 5        # [rad/s] used to normalise observations
 
-#target attitude
-q_desired_array_global    = np.array([1.0, 0.0, 0.0, 0.0])
-omega_desired_array_global = np.array([0.0, 0.0, 0.0])     # [rad/s]
-
-boresight_vector_in_b_global = np.array([1.0, 0.0, 0.0])   # instrument boresight in body frame Sichtlinie, Peilrichtung oder Mittelachse
+q_desired_array_global    = np.array([1.0, 0.0, 0.0, 0.0])   # target attitude (identity)
+omega_desired_array_global = np.array([0.0, 0.0, 0.0])        # target angular rate
+boresight_vector_in_b_global = np.array([1.0, 0.0, 0.0])      # instrument axis in body frame (+X)
 
 time_per_step    = 0.1    # [s]
 time_per_episode = 100    # [s]
 
-# Initial attitude angle bounds (error w.r.t. desired), [deg]
+# initial attitude error bounds [deg]
 angle_bound_lower = 80
 angle_bound_upper = 180
 
-# F-zone placement parameters (exponential-map method) aka Keep out Zone geometry
+# KOZ placement parameters (exponential-map method)
 vector_rotation_angle1_ratio_low  = 0.5
 vector_rotation_angle1_ratio_high = 0.5
 vector_rotation_angle2_low  = 0.0   # [deg]
 vector_rotation_angle2_high = 0.0   # [deg]
 
-# ---------------------------------------------------------------------------
-# Numba-accelerated math helpers
-# ---------------------------------------------------------------------------
+# --- math helpers (Numba JIT) ---
 
 @njit
 def sign_fun(x):
@@ -92,7 +75,7 @@ def sat_ode(state, inertia, inertia_inv, torque):
     inertia_inv = inertia_inv.astype(np.float32)
     torque      = torque.astype(np.float32)
 
-    q_quat = state[:4] # 4D with complex numbers
+    q_quat = state[:4]
     omega  = state[4:7]
 
     omega_cross = np.array([
@@ -126,9 +109,7 @@ def random_unit_quat_with_angle_bound(lower_deg, upper_deg):
 def random_angular_rate(rate_bound=0.0):
     return np.random.uniform(low=-rate_bound, high=rate_bound, size=3)
 
-# ---------------------------------------------------------------------------
-# Reward function  (Phase 1 — with KOZ penalty)
-# ---------------------------------------------------------------------------
+# --- reward function ---
 
 def reward_function_with_Fzone(state, action):
     if not hasattr(reward_function_with_Fzone, 'action_prev'):
@@ -145,11 +126,10 @@ def reward_function_with_Fzone(state, action):
     reward_function_with_Fzone.action_prev = action.copy()
 
 
-    # penalise keep-out zone violations: full penalty when inside (margin <= 0),
-    # exponentially decaying penalty when close but still outside
+    # full penalty inside KOZ, exponential decay outside
     theta_margin = state[7]
     beta, alpha  = 10, 66
-    if theta_margin <= 0: #violation condition
+    if theta_margin <= 0:
         penalty_f_zone = beta
     else:
         penalty_f_zone = beta * math.exp(-alpha * theta_margin)
@@ -168,33 +148,20 @@ def reward_function_with_Fzone(state, action):
         return reward0 + 9
     return reward0
 
-# ---------------------------------------------------------------------------
-# Environment
-# ---------------------------------------------------------------------------
+# --- environment ---
 
 class SatDynEnv(gym.Env):
-    """
-    Gymnasium environment for satellite attitude control with a single Keep-Out Zone.
-
-    Observation (normalised, shape=(13,)):
-        [qe(4), omega_e/scale_omega(3), theta_margin_norm(1), theta_norm(1),
-         relative_avoid_vec_in_b(3), qe_0_prev(1)]
-
-    Action (shape=(3,)):  normalised torques in [-1, 1]
-    """
+    # Satellite attitude control with a single KOZ. See module header for state/action layout.
 
     def __init__(self, angle_bound_lower=80, angle_bound_upper=180,
              beta=10, alpha=66, scale_torque=2,
              time_per_episode=100, time_per_step=0.1):
         super().__init__()
-        self._angle_bound_lower = angle_bound_lower  # smallest starting angle error in degrees
-        self._angle_bound_upper = angle_bound_upper  # largest starting angle error in degrees
-        self._beta              = beta               # how much the satellite is punished for entering the keep-out zone
-        self._alpha             = alpha              # how quickly the punishment grows near the keep-out zone edge
-        self._scale_torque      = scale_torque       # maximum force the thrusters can apply per axis in Nm
-        # replace the globals where used:
-        # angle_bound_lower → self._angle_bound_lower  (in reset)
-        # beta/alpha        → self._beta / self._alpha  (in reward_function_with_Fzone)
+        self._angle_bound_lower = angle_bound_lower  # initial attitude error range [deg]
+        self._angle_bound_upper = angle_bound_upper
+        self._beta              = beta               # KOZ violation penalty magnitude
+        self._alpha             = alpha              # KOZ penalty decay rate near boundary
+        self._scale_torque      = scale_torque       # max thruster torque per axis [Nm]
 
         self.action_space = spaces.Box(low=-1, high=1, shape=(3,), dtype=np.float32)
 
@@ -220,7 +187,7 @@ class SatDynEnv(gym.Env):
         self.q_desired_array   = q_desired_array_global.copy()
         self.omega_desired_array = omega_desired_array_global.copy()
 
-        self.inertia = np.array([ #intertia tensor aka Massenträgheitsverteilung im Raum -> currently asymmetric
+        self.inertia = np.array([  # inertia tensor [kg·m²], asymmetric
             [60,  5,  1],
             [ 5, 50,  2],
             [ 1,  2, 70],
@@ -231,16 +198,14 @@ class SatDynEnv(gym.Env):
         self.steps     = 0
         self.f_zone    = None
 
-        # Initialise state so the object is valid before reset() is called
-        self.state = np.zeros(13, dtype=np.float32)
+        self.state = np.zeros(13, dtype=np.float32)  # placeholder until reset() runs
         self.reset()
 
-    # ------------------------------------------------------------------
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
 
-        # Clear cross-episode reward state
+        # clear stateful action memory from previous episode
         if hasattr(reward_function_with_Fzone, 'action_prev'):
             del reward_function_with_Fzone.action_prev
 
@@ -276,9 +241,7 @@ class SatDynEnv(gym.Env):
             half_angle = 0.0
         else:
             half_angle_max = np.minimum(half_angle_max, 30.0)
-            # KOZ size: randomly sampled between 15° and half_angle_max (capped at 30°).
-            # Increase the lower bound to make the forbidden zone larger (harder),
-            # decrease it to make it smaller (easier).
+            # sample KOZ size in [15°, min(half_angle_max, 30°)]; raise lower bound = harder task
             half_angle = np.random.uniform(15.0, half_angle_max) * deg2rad
 
         self.f_zone = KeepOutZone(boresight_b, avoid_vec_i, half_angle)
@@ -305,14 +268,13 @@ class SatDynEnv(gym.Env):
 
         return self._normalise(), {}
 
-    # ------------------------------------------------------------------
 
     def step(self, action):
         action       = np.asarray(action, dtype=np.float32)
         inertia_inv  = np.linalg.inv(self.inertia)
         qe_0_prev    = self.state[0]
 
-        # 4th-order Runge-Kutta integration
+        # RK4 integration
         torque = action * scale_torque
         f1 = self.dt * sat_ode(self.state[:7], self.inertia, inertia_inv, torque)
         f2 = self.dt * sat_ode(self.state[:7] + 0.5*f1, self.inertia, inertia_inv, torque)
@@ -348,7 +310,6 @@ class SatDynEnv(gym.Env):
 
         return self._normalise(), reward, done, False, {}
 
-    # ------------------------------------------------------------------
 
     def render(self):
         err_deg = 2 * np.degrees(math.acos(np.clip(self.state[0], -1.0, 1.0)))
@@ -359,19 +320,86 @@ class SatDynEnv(gym.Env):
             f"theta_margin={self.state[7]*rad2deg:.2f}deg  "
             f"theta={self.state[8]*rad2deg:.2f}deg"
         )
+        self._pyvista_render()
+
+    def _pyvista_render(self):
+        try:
+            import pyvista as pv
+            from scipy.spatial.transform import Rotation
+        except ImportError:
+            return
+
+        # First call: build static scene elements once, add dynamic placeholders.
+        if not hasattr(self, '_pl') or self._pl is None:
+            # --- static elements (task geometry, never change) ---
+            koz_cone = pv.Cone(
+                center=self.f_zone.avoid_vector_in_i * 0.45,
+                direction=-self.f_zone.avoid_vector_in_i,
+                angle=np.degrees(self.f_zone.half_angle),
+                height=0.9,
+                resolution=80,
+            )
+            forbidden = pv.PlatonicSolid('dodecahedron')
+            forbidden.scale([0.1, 0.1, 0.1], inplace=True)
+            forbidden.translate(self.f_zone.avoid_vector_in_i * 0.9, inplace=True)
+
+            r_des = Rotation.from_quat([
+                self.q_desired_array[1], self.q_desired_array[2],
+                self.q_desired_array[3], self.q_desired_array[0],
+            ])
+            goal_dir   = r_des.as_matrix() @ self.f_zone.boresight_vector_in_b
+            goal_arrow = pv.Arrow(start=[0, 0, 0], direction=goal_dir, scale=0.3)
+
+            # --- dynamic placeholders (updated every frame) ---
+            pv.global_theme.allow_empty_mesh = True
+            self._sat_mesh  = pv.PolyData()
+            self._bore_mesh = pv.PolyData()
+
+            self._pl = pv.Plotter()
+            self._pl.add_axes()
+            self._pl.add_mesh(self._sat_mesh,  color='silver', label='Satellite')
+            self._pl.add_mesh(self._bore_mesh, color='green',  label='Boresight (current)')
+            self._pl.add_mesh(koz_cone,        color='red',    opacity=0.6, label='KOZ')
+            self._pl.add_mesh(forbidden,       color='black',  label='Forbidden object')
+            self._pl.add_mesh(goal_arrow,      color='yellow', label='Goal')
+            self._pl.add_legend()
+            self._pl.show(interactive_update=True, title="SatDynEnv live render")
+
+        # Build dynamic geometry for the current attitude
+        q_abs = quaternion_multiply(self.q_desired_array, self.state[:4])
+        r = Rotation.from_quat([q_abs[1], q_abs[2], q_abs[3], q_abs[0]])
+        T = np.eye(4)
+        T[:3, :3] = r.as_matrix()
+        R = T[:3, :3]
+
+        body    = pv.Box(bounds=(-0.06,  0.06, -0.06,  0.06, -0.09,  0.09))
+        panel_l = pv.Box(bounds=(-0.08,  0.08, -0.28, -0.07, -0.005, 0.005))
+        panel_r = pv.Box(bounds=(-0.08,  0.08,  0.07,  0.28, -0.005, 0.005))
+        sat = pv.merge([body, panel_l, panel_r])
+        sat.transform(T, inplace=True)
+
+        boresight_i     = R @ self.f_zone.boresight_vector_in_b
+        boresight_arrow = pv.Arrow(start=[0, 0, 0], direction=boresight_i, scale=0.2)
+
+        self._sat_mesh.copy_from(sat)
+        self._bore_mesh.copy_from(boresight_arrow)
+        self._pl.update()
 
     def close(self):
-        pass
+        if hasattr(self, '_pl') and self._pl is not None:
+            self._pl.close()
+            self._pl = None
+            self._sat_mesh = self._bore_mesh = self._koz_mesh = None
+            self._forb_mesh = self._goal_mesh = None
 
-    # ------------------------------------------------------------------
 
     def _normalise(self):
-        q_e_norm          = self.state[:4]              # quaternion error stays as-is, already in [-1, 1]
-        omega_norm        = self.state[4:7] / scale_omega   # scale angular rate to [-1, 1] using max expected rate
-        theta_margin_norm = -1 + (self.state[7] + np.pi/2) * 4 / (3*np.pi)  # maps [-π/2, π] → [-1, 1]; zero crossing at -1/3 marks KOZ boundary
-        theta_norm        = -1 + self.state[8] * 2 / np.pi  # maps [0, π] → [-1, 1]
-        rel_avoid_norm    = self.state[9:12]            # unit vector, already in [-1, 1]
-        qe0_prev_norm     = self.state[12]              # previous scalar quaternion, already in [-1, 1]
+        q_e_norm          = self.state[:4]
+        omega_norm        = self.state[4:7] / scale_omega
+        theta_margin_norm = -1 + (self.state[7] + np.pi/2) * 4 / (3*np.pi)  # [-π/2, π] → [-1, 1]
+        theta_norm        = -1 + self.state[8] * 2 / np.pi                   # [0, π]    → [-1, 1]
+        rel_avoid_norm    = self.state[9:12]
+        qe0_prev_norm     = self.state[12]
 
 
         return np.concatenate((
