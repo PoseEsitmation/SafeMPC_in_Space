@@ -185,7 +185,7 @@ class SatDynEnv(gym.Env):
 
     def __init__(self, angle_bound_lower=80, angle_bound_upper=180,
              beta=10, alpha=66, scale_torque=2,
-             time_per_episode=100, time_per_step=0.1):
+             time_per_episode=100, time_per_step=0.1, inertia=None):
         super().__init__()
         self._angle_bound_lower = angle_bound_lower  # smallest starting angle error in degrees
         self._angle_bound_upper = angle_bound_upper  # largest starting angle error in degrees
@@ -220,11 +220,14 @@ class SatDynEnv(gym.Env):
         self.q_desired_array   = q_desired_array_global.copy()
         self.omega_desired_array = omega_desired_array_global.copy()
 
-        self.inertia = np.array([ #intertia tensor aka Massenträgheitsverteilung im Raum -> currently asymmetric
-            [60,  5,  1],
-            [ 5, 50,  2],
-            [ 1,  2, 70],
-        ], dtype=np.float32)
+        if inertia is None: # intertia tensor aka Massenträgheitsverteilung -> default asymmetric
+            self.inertia = np.array([
+                [60,  5,  1],
+                [ 5, 50,  2],
+                [ 1,  2, 70],
+            ], dtype=np.float32)
+        else:
+            self.inertia = np.array(inertia, dtype=np.float32)
 
         self.dt        = time_per_step
         self.max_steps = int(time_per_episode / self.dt)

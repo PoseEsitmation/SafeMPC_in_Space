@@ -69,19 +69,20 @@ ROTATE_ENV = [[[0., -0.02, 0.84029956], [0.70710678118, 0, 0, 0.70710678118],  #
                [0.02, 0., 0.84029956], [0, 0, 0, 0]]]
 SLIDE_ENV = [0.001, 0.0005, 0.002, 0.0026, 0.005]
 
-SPACE_ENV_PRESETS = {
-    # default: large starting error (80–180°), full torque, standard KOZ penalty
-    "spaceEnv":       {},
+SPACE_ENV_PRESETS = [
+    {},                                                                                    # Task 0 — default: large starting error (80–180°), full torque, standard KOZ penalty
+    {"angle_bound_lower": 10,  "angle_bound_upper": 45},                                  # Task 1 — easy: small starting error (10–45°)
+    {"angle_bound_lower": 90,  "angle_bound_upper": 180, "beta": 50, "alpha": 100},       # Task 2 — hard: large starting error + 5x stronger KOZ penalty
+    {"scale_torque": 0.5},                                                                 # Task 3 — weak: half thruster power (0.5 Nm)
+]
 
-    # easy: small starting error (10–45°)
-    "spaceEnv_easy":  {"angle_bound_lower": 10,  "angle_bound_upper": 45},
+SPACE_MOI_ENVS = [
+    {"inertia": [[60, 5, 1], [5, 50, 2], [1, 2, 70]]},       # Task 0 — baseline asymmetric (current default)
+    {"inertia": [[20, 1, 0], [1, 22, 0], [0, 0, 25]]},        # Task 1 — nearly symmetric, small satellite
+    {"inertia": [[120, 10, 3], [10, 90, 5], [3, 5, 150]]},    # Task 2 — heavy asymmetric, large satellite
+    {"inertia": [[80, 2, 0], [2, 80, 0], [0, 0, 20]]},        # Task 3 — oblate (flat disk shape)
+]
 
-    # hard: large starting error + 5x stronger KOZ penalty
-    "spaceEnv_hard":  {"angle_bound_lower": 90,  "angle_bound_upper": 180, "beta": 50, "alpha": 100},
-
-    # weak: half thruster power (0.5 Nm), simulates a low-power spacecraft
-    "spaceEnv_weak":  {"scale_torque": 0.5},
-}
 
 
 
@@ -117,11 +118,8 @@ class EnvSpecs():
         "lqr10": 20,
         "door": 3,
         "door_pose": 7,
-        # action dims
-        **{name: 3  for name in SPACE_ENV_PRESETS},
-
-
-
+        "spaceEnv": 3,
+        "spaceEnv_moi": 3,
     }
 
     x_dims = {
@@ -139,8 +137,8 @@ class EnvSpecs():
         "lqr10": 20,
         "door": 4,
         "door_pose": 10,
-        # obs dims  
-        **{name: 13 for name in SPACE_ENV_PRESETS},
+        "spaceEnv": 13,
+        "spaceEnv_moi": 13,
     }
 
     @classmethod
@@ -281,12 +279,16 @@ class CLEnvHandler():
                                  default_controller="OSC_POSE"),
                              pose_control=True, has_renderer=render)
             env = GymWrapper(env)
-        elif self.cl_env in SPACE_ENV_PRESETS:
+        elif self.cl_env == "spaceEnv_moi":
             from .space_KOZ import SatDynEnv
-            env = SatDynEnv(**SPACE_ENV_PRESETS[self.cl_env])
+            env = SatDynEnv(**SPACE_MOI_ENVS[task_id])
+        elif self.cl_env == "spaceEnv":
+            from .space_KOZ import SatDynEnv
+            env = SatDynEnv(**SPACE_ENV_PRESETS[task_id])
         if not self.cl_env.startswith("lqr"):
             if hasattr(env, 'seed'):
                 env.seed(self.seed)
+
 
 
         if not replica:
