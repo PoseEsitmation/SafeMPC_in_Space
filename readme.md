@@ -40,6 +40,8 @@ python main.py run --method METHOD --env ENV
 | `half_cheetah_body` | Half-cheetah with body variations |
 | `pusher`            | Pusher manipulation task          |
 | `door_pose`         | Door opening task                 |
+| `spaceEnv`          | Satellite attitude control with KOZ — 4 tasks: default, easy, hard, weak thruster               |
+| `spaceEnv_moi`      | Satellite attitude control with KOZ — 4 tasks with different moment of inertia tensors           |
 
 ### Examples
 
