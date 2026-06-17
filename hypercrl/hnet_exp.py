@@ -353,7 +353,7 @@ def plot_embs(hparams, embs):
     fig.savefig(f'{hparams.save_folder}/embedding_{hparams.seed}.png')
 
 def play_model(hparams):
-    _, hnet, agent, checkpoint, _ = reload_model(hparams)
+    _, hnet, agent, checkpoint, _ = reload_model(hparams, need_data=False)
 
     # Reset seed
     reset_seed(hparams.seed)
@@ -362,8 +362,13 @@ def play_model(hparams):
     embs = hnet.get_task_embs()
     #plot_embs(hparams, embs)
 
+    num_tasks = checkpoint['num_tasks_seen']
+    if num_tasks == 0:
+        print("[play] No completed task checkpoint found — playing current model.pt")
+        num_tasks = 1
+
     envs = CLEnvHandler(hparams.env, hparams.seed)
-    for task_id in range(checkpoint['num_tasks_seen']):
+    for task_id in range(num_tasks):
         # Cache the mainnet weight
         agent.cache_hnet(task_id)
         env = envs.add_task(task_id, render=True)

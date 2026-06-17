@@ -6,7 +6,7 @@ import os
 from .mbrl import Baseline, PNN, MTBaseline
 from .regularizer import BaselineReg
 
-from hypercrl.tools import MonitorRL, MonitorHnet, str_to_act, Hparams
+from hypercrl.tools import MonitorRL, MonitorHnet, str_to_act, Hparams, find_run_dir
 from hypercrl.control import MPC, SafeAgent
 
 from hypercrl.hypercl import HyperNetwork, MLP, ChunkedHyperNetworkHandler, MainNetInterface
@@ -72,19 +72,17 @@ def build_model(hparams):
 
     return model
 
-def reload_model(hparams, task_id=None):
+def reload_model(hparams, task_id=None, need_data=True):
     model = build_model(hparams)
-    # Restore Data
-    collector = MonitorRL.resume_from_disk(hparams)
+    # Restore Data (not needed during play)
+    collector = MonitorRL.resume_from_disk(hparams) if need_data else None
     agent = SafeAgent(hparams, model, collector=collector)
 
     # Load Checkpoint
-    if task_id is None:
-        model_path = os.path.join(hparams.save_folder,
-            f'TB{hparams.env}_{hparams.model}_{hparams.seed}', 'model.pt')
-    else:
-        model_path = os.path.join(hparams.save_folder,
-            f'TB{hparams.env}_{hparams.model}_{hparams.seed}', f'model_{task_id}.pt')     
+    run_dir = find_run_dir(hparams)
+    model_dir = os.path.join(run_dir, 'model')
+    filename = 'model.pt' if task_id is None else f'model_{task_id}.pt'
+    model_path = os.path.join(model_dir, filename)
     checkpoint = torch.load(model_path, map_location=hparams.device)
     print("Checkpoint Loaded")
 
@@ -183,37 +181,34 @@ def build_model_hnet(hparams, num_input=2):
 
     return mnet, hnet
 
-def reload_model_hnet(hparams, task_id=None, num_input=2):
+def reload_model_hnet(hparams, task_id=None, num_input=2, need_data=True):
     mnet, hnet = build_model_hnet(hparams, num_input=num_input)
-    # Restore Data
-    collector = MonitorRL.resume_from_disk(hparams)
+    # Restore Data (not needed during play)
+    collector = MonitorRL.resume_from_disk(hparams) if need_data else None
     agent = SafeAgent(hparams, mnet, hnet=hnet, collector=collector)
 
     # Load Checkpoint
-    if task_id is None:
-        model_path = os.path.join(hparams.save_folder,
-            f'TB{hparams.env}_{hparams.model}_{hparams.seed}', 'model.pt')
-    else:
-        model_path = os.path.join(hparams.save_folder,
-            f'TB{hparams.env}_{hparams.model}_{hparams.seed}', f'model_{task_id}.pt')     
-
+    run_dir = find_run_dir(hparams)
+    model_dir = os.path.join(run_dir, 'model')
+    filename = 'model.pt' if task_id is None else f'model_{task_id}.pt'
+    model_path = os.path.join(model_dir, filename)
     checkpoint = torch.load(model_path, map_location=hparams.devices)
     print("Checkpoint Loaded")
 
     # Remove potentially unwanted data collector datas
-    for tid in range(checkpoint['num_tasks_seen'], hparams.num_tasks):
-        try:
-            collector.states.pop(tid) 
-            collector.actions.pop(tid)
-            collector.nexts.pop(tid)
-            collector.train_inds.pop(tid)
-            collector.val_inds.pop(tid)
-
-            collector.x_aggregate.pop(tid)
-            collector.a_aggregate.pop(tid)
-            collector.norms.pop(tid)
-        except KeyError:
-            pass
+    if collector is not None:
+        for tid in range(checkpoint['num_tasks_seen'], hparams.num_tasks):
+            try:
+                collector.states.pop(tid)
+                collector.actions.pop(tid)
+                collector.nexts.pop(tid)
+                collector.train_inds.pop(tid)
+                collector.val_inds.pop(tid)
+                collector.x_aggregate.pop(tid)
+                collector.a_aggregate.pop(tid)
+                collector.norms.pop(tid)
+            except KeyError:
+                pass
 
     # Add task embeddings to the hnet
     for task_id in range(checkpoint['num_tasks_seen']):

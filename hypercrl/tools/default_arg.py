@@ -156,6 +156,7 @@ def HP(env, seed=None, save_folder='./runs/lqr'):
     # Common train setting
     hparams.num_ds_worker = 0
     hparams.print_train_every = 1000
+    hparams.save_every = 1000
 
     # common RL setting
     hparams.env = env
@@ -200,7 +201,7 @@ def HP(env, seed=None, save_folder='./runs/lqr'):
         return default_arg_pusher_rot(hparams)
     elif env == "pusher_slide":
         return default_arg_pusher_slide(hparams)
-    elif env in ("spaceEnv", "spaceEnv_moi"):
+    elif env.startswith("spaceEnv"):
         return default_arg_sat(hparams)
 
 def default_arg_metaworld10(hparams):

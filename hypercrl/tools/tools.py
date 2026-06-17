@@ -1,4 +1,5 @@
 import io
+import glob
 import PIL.Image
 import torch
 import random
@@ -21,6 +22,18 @@ from hypercrl import dataset
 
 from hypercrl import dataset
 from hypercrl.envs.cl_env import CLEnvHandler, EnvSpecs
+
+
+def find_run_dir(hparams) -> str:
+    """Return the path of the most recent saved run directory for env/model/seed."""
+    pattern = os.path.join(
+        hparams.save_folder, f'*_TB{hparams.env}_{hparams.model}_{hparams.seed}')
+    dirs = sorted(glob.glob(pattern))
+    if not dirs:
+        raise FileNotFoundError(
+            f"No saved run found matching {pattern!r}. "
+            "Run without --play / resume first.")
+    return dirs[-1]
 
 
 def reset_seed(seed):
@@ -125,9 +138,19 @@ class MonitorBase():
         self.hparams = hparams
         self.collector = collector
         self.btest = btest
-        timestamp = time.strftime('%Y%m%d_%H%M%S')
-        self.tflog_dir = os.path.join(
-            hparams.save_folder, f'TB{hparams.env}_{hparams.model}_{hparams.seed}_{timestamp}')
+        if getattr(hparams, 'resume', False):
+            self.tflog_dir = find_run_dir(hparams)
+        else:
+            timestamp = time.strftime('%Y%m%d_%H%M%S')
+            self.tflog_dir = os.path.join(
+                hparams.save_folder,
+                f'{timestamp}_TB{hparams.env}_{hparams.model}_{hparams.seed}')
+        self.model_dir = os.path.join(self.tflog_dir, 'model')
+        os.makedirs(hparams.save_folder, exist_ok=True)
+        os.makedirs(self.tflog_dir, exist_ok=True)
+        os.makedirs(self.model_dir, exist_ok=True)
+        print(f"[save] run dir  : {self.tflog_dir}")
+        print(f"[save] model dir: {self.model_dir}")
         self.writer = SummaryWriter(log_dir=self.tflog_dir)
 
         self.val_stats = []
@@ -290,7 +313,7 @@ class MonitorBase():
     def save(self):
         hp = self.hparams
         # Save training csv
-        with open(f'{hp.save_folder}/{hp.env}_{hp.model}_{hp.seed}.csv', 'w') as f:
+        with open(f'{self.tflog_dir}/{hp.env}_{hp.model}_{hp.seed}.csv', 'w') as f:
             fieldnames = ['task', 'time', 'diff']
             writer = csv.DictWriter(f, fieldnames=fieldnames)
 
@@ -323,6 +346,16 @@ class MonitorRL(MonitorBase):
         for task_id in range(hparams.num_tasks):
             self.eval_envs.add_task(task_id, render=False)
 
+        self._save_task_manifest()
+
+    def _save_task_manifest(self) -> None:
+        tasks = [CLEnvHandler.describe_task(self.hparams.env, tid)
+                 for tid in range(self.hparams.num_tasks)]
+        path = os.path.join(self.tflog_dir, "tasks.json")
+        with open(path, "w") as f:
+            json.dump(tasks, f, indent=2)
+        print(f"[save] wrote {path}")
+
     def env_step(self, state, reward, done, info, task_id):
         self.env_iter += 1
         self.rewards.append(reward)
@@ -331,7 +364,7 @@ class MonitorRL(MonitorBase):
         # positive = safe, zero = at boundary, below -1/3 = camera inside forbidden zone (violation)
         if self.hparams.env.startswith("spaceEnv") and state is not None:
             self.writer.add_scalar(
-                f'train_env/task_{task_id}/thetha_margin', state[7], self.env_iter)
+                f'train_env/task_{task_id}/theta_margin', state[7], self.env_iter)
             att_err_deg = 2 * np.degrees(np.arccos(np.clip(np.abs(state[0]), 0.0, 1.0)))
             self.writer.add_scalar(
                 f'train_env/task_{task_id}/attitude_error_deg', att_err_deg, self.env_iter)
@@ -359,9 +392,42 @@ class MonitorRL(MonitorBase):
         if self.env_iter % self.eval_env_run_every == 0:
             self.run_eval_env(task_id)
 
+        if self.env_iter % self.hparams.save_every == 0:
+            self._checkpoint(task_id)
+
         # Log dataset norm statistic
         if self.env_iter % self.eval_env_run_every == 0:
             self.log_xu_norm(task_id)
+
+    def _norm_dict(self) -> dict:
+        """Collect normalization stats from the data collector for all tasks seen so far."""
+        norms = {}
+        for tid in range(self.collector.num_tasks()):
+            try:
+                x_mu, x_std, a_mu, a_std = self.collector.norm(tid)
+                norms[tid] = {
+                    'x_mu': x_mu.cpu(), 'x_std': x_std.cpu(),
+                    'a_mu': a_mu.cpu(), 'a_std': a_std.cpu(),
+                }
+            except (KeyError, IndexError):
+                pass
+        return norms
+
+    def _checkpoint(self, task_id: int) -> None:
+        """Overwrite model.pt in the model dir — no CSVs or pkl touched."""
+        save_dict = {
+            'train_iter': self.train_iter,
+            'env_step': self.env_iter,
+            'num_tasks_seen': self.collector.num_tasks(),
+            'norms': self._norm_dict(),
+        }
+        for name, model in self.model_to_save.items():
+            save_dict[f'{name}_state_dict'] = model.state_dict()
+        if self.optimizer is not None:
+            save_dict['optimizer_state_dict'] = self.optimizer.state_dict()
+        latest_pt = os.path.join(self.model_dir, 'model.pt')
+        torch.save(save_dict, latest_pt)
+        print(f"[checkpoint] step {self.env_iter} → {latest_pt}")
 
     def _log_safety(self, info: dict, task_id: int) -> None:
         """Log CBF, CLF, and keep-out zone metrics to TensorBoard every step."""
@@ -594,7 +660,7 @@ class MonitorRL(MonitorBase):
         super(MonitorRL, self).save()
 
         hp = self.hparams
-        with open(f'{hp.save_folder}/RL{hp.env}_{hp.model}_{hp.seed}.csv', 'w') as f:
+        with open(f'{self.tflog_dir}/RL{hp.env}_{hp.model}_{hp.seed}.csv', 'w') as f:
             fieldnames = ['task', 'envstep',
                           'reward', 'runtime', 'on_policy_diff']
             writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -619,6 +685,7 @@ class MonitorRL(MonitorBase):
         save_dict = {'train_iter': self.train_iter,
                      'env_step': self.env_iter,
                      'num_tasks_seen': self.collector.num_tasks(),
+                     'norms': self._norm_dict(),
                      }
         for name, model in self.model_to_save.items():
             save_dict[f'{name}_state_dict'] = model.state_dict()
@@ -626,18 +693,25 @@ class MonitorRL(MonitorBase):
         if self.optimizer is not None:
             save_dict['optimizer_state_dict'] = self.optimizer.state_dict()
 
-        # Save the model twice. One permenant, one cached
-        torch.save(save_dict, f'{self.tflog_dir}/model.pt')
-        torch.save(save_dict, f'{self.tflog_dir}/model_{task_id}.pt')
+        # Latest checkpoint (overwrite)
+        latest_pt = os.path.join(self.model_dir, 'model.pt')
+        torch.save(save_dict, latest_pt)
+        print(f"[save] wrote {latest_pt}")
+
+        # Permanent per-task snapshot
+        task_pt = os.path.join(self.model_dir, f'model_{task_id}.pt')
+        torch.save(save_dict, task_pt)
+        print(f"[save] wrote {task_pt}")
 
         # Save Data Collector
-        with open(f'{self.tflog_dir}/data.pkl', 'wb') as f:
+        data_pkl = f'{self.tflog_dir}/data.pkl'
+        with open(data_pkl, 'wb') as f:
             pickle.dump(self.collector, f, pickle.HIGHEST_PROTOCOL)
+        print(f"[save] wrote {data_pkl}")
 
     @staticmethod
     def resume_from_disk(hparams):
-        tflog_dir = os.path.join(
-            hparams.save_folder, f'TB{hparams.env}_{hparams.model}_{hparams.seed}')
+        tflog_dir = find_run_dir(hparams)
         with open(f'{tflog_dir}/data.pkl', 'rb') as f:
             # For backward compatability
             sys.modules['dataset'] = dataset
@@ -652,7 +726,7 @@ class MonitorRL(MonitorBase):
 
         # Restore rl stats object
         hp = self.hparams
-        with open(f'{hp.save_folder}/RL{hp.env}_{hp.model}_{hp.seed}.csv', 'r') as f:
+        with open(f'{self.tflog_dir}/RL{hp.env}_{hp.model}_{hp.seed}.csv', 'r') as f:
             reader = csv.DictReader(f)
 
             for row in reader:
@@ -670,7 +744,7 @@ class MonitorRL(MonitorBase):
         for _ in range(num_tasks_seen):
             self.val_stats.append({"time": [], "nll": [], "diff": []})
 
-        with open(f'{hp.save_folder}/{hp.env}_{hp.model}_{hp.seed}.csv', 'r') as f:
+        with open(f'{self.tflog_dir}/{hp.env}_{hp.model}_{hp.seed}.csv', 'r') as f:
             reader = csv.DictReader(f)
 
             self.val_stats.append({"time": [],

@@ -314,3 +314,30 @@ class CLEnvHandler():
 
         for env in self._envs:
             env.close()
+
+    @staticmethod
+    def describe_task(env_name: str, task_id: int) -> dict:
+        """Return a serialisable description of a task for the tasks.json manifest."""
+        desc: dict = {"task_id": task_id, "env": env_name}
+        if env_name == "cartpole":
+            desc["gym_id"] = CARTPOLE_ENVS[task_id] if task_id < len(CARTPOLE_ENVS) else None
+        elif env_name == "cartpole_bin":
+            desc["gym_id"] = CARTPOLE_BIN_ENVS[task_id] if task_id < len(CARTPOLE_BIN_ENVS) else None
+        elif env_name in ("lqr", "lqr10"):
+            desc["friction"] = 0.5 * task_id
+        elif env_name in ("half_cheetah_body", "half_cheetah"):
+            desc["gym_id"] = CHEETAH_ENVS[task_id] if task_id < len(CHEETAH_ENVS) else None
+        elif env_name == "half_cheetah_safe":
+            desc["keep_out_zones"] = str(HALF_CHEETAH_SAFE_ENVS[task_id]) if task_id < len(HALF_CHEETAH_SAFE_ENVS) else None
+        elif env_name == "inverted_pendulum":
+            desc["gym_id"] = INVERTED_PENDULUM_ENVS[task_id] if task_id < len(INVERTED_PENDULUM_ENVS) else None
+        elif env_name == "reacher":
+            desc["gym_id"] = REACHER_ENVS[task_id] if task_id < len(REACHER_ENVS) else None
+        elif env_name == "spaceEnv_moi":
+            desc["params"] = SPACE_MOI_ENVS[task_id] if task_id < len(SPACE_MOI_ENVS) else {}
+        elif env_name.startswith("spaceEnv"):
+            desc["params"] = SPACE_ENV_PRESETS[task_id] if task_id < len(SPACE_ENV_PRESETS) else {}
+        elif env_name == "door_pose":
+            desc["handle_type"] = DOOR_ENV[task_id][0] if task_id < len(DOOR_ENV) else None
+            desc["joint_range"] = DOOR_ENV[task_id][1] if task_id < len(DOOR_ENV) else None
+        return desc
