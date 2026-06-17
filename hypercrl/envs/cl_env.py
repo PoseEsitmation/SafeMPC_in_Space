@@ -221,7 +221,10 @@ class CLEnvHandler():
             env = gym.make(CHEETAH_ENVS[task_id],
                            render_mode="human" if render else None)
         elif self.cl_env == "half_cheetah_safe":
-            env = HALF_CHEETAH_SAFE_ENVS[task_id](render_mode="human" if render else None)
+            env = TimeLimit(
+                HALF_CHEETAH_SAFE_ENVS[task_id](render_mode="human" if render else None),
+                max_episode_steps=1000,
+            )
         elif self.cl_env == "half_cheetah":
             env = gym.make('MBRLHalfCheetah-v0',
                            render_mode="human" if render else None)
