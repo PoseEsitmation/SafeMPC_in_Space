@@ -148,15 +148,21 @@ def train(task_id, model, trainer, logger, collector, btest, hparams):
 
 
 def play_model(hparams):
-    _, agent, checkpoint, _ = reload_model(hparams)
+    _, agent, checkpoint, _ = reload_model(hparams, need_data=False)
 
     # Reset seed
     reset_seed(hparams.seed)
 
+    num_tasks = checkpoint['num_tasks_seen']
+    # If training was interrupted mid-task, play whatever model.pt has
+    if num_tasks == 0:
+        print("[play] No completed task checkpoint found — playing current model.pt")
+        num_tasks = 1
+
     envs = CLEnvHandler(hparams.env, hparams.seed)
-    for task_id in range(0, checkpoint['num_tasks_seen']):
-        if hparams.model == "single":
-            _, agent, _, _ = reload_model(hparams, task_id=task_id)
+    for task_id in range(0, num_tasks):
+        if hparams.model == "single" and checkpoint['num_tasks_seen'] > 0:
+            _, agent, _, _ = reload_model(hparams, task_id=task_id, need_data=False)
 
         env = envs.add_task(task_id, render=True)
 

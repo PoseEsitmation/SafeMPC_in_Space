@@ -147,7 +147,7 @@ class MPC(Agent):
         self._cached_weights = None
 
     def cache_state_norm(self, task_id: int) -> None:
-        if self.normalize_xu:
+        if self.normalize_xu and self.collector is not None:
             x_mu, x_std, a_mu, a_std = self.collector.norm(task_id)
             self.x_mu, self.x_std = x_mu.to(self.device), x_std.to(self.device)
             self.a_mu, self.a_std = a_mu.to(self.device), a_std.to(self.device)

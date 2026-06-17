@@ -73,10 +73,31 @@ python main.py run --method METHOD --env ENV --savepath ./runs/my_experiment
 # e.g.: python main.py run --method single --env cartpole --device cpu --seed 42 --savepath ./runs/cartpole
 ```
 
+Each run creates a timestamped subdirectory inside `--savepath`:
+```
+runs/my_experiment/
+└── 20260617_143022_TBcartpole_single_2020/   ← one directory per run
+    ├── events.out.tfevents.*                  ← TensorBoard data
+    ├── hparams.csv                            ← hyperparameter snapshot
+    ├── data.pkl                               ← replay buffer
+    ├── cartpole_single_2020.csv              ← validation stats
+    └── model/
+        ├── model.pt                           ← latest checkpoint (overwritten every 1000 steps)
+        ├── model_0.pt                         ← permanent end-of-task snapshots
+        └── model_1.pt
+```
+
+`model.pt` is overwritten every `save_every` env steps (default 1000) so a crash never loses more than 1000 steps of progress. Per-task snapshots (`model_N.pt`) are written once at the end of each task and never overwritten.
+
+The timestamp prefix (`YYYYMMDD_HHMMSS`) ensures runs sort chronologically on disk and in the TensorBoard directory picker. Every run is kept independently — nothing is overwritten.
+
 **Step 2 — Start TensorBoard** (Terminal 2):
 ```bash
+# Watch all runs at once (recommended):
 tensorboard --logdir /absolute/path/to/runs/my_experiment
-# e.g.: tensorboard --logdir /home/user/SafeMPC_in_Space/runs/cartpole
+
+# Or watch a single specific run:
+tensorboard --logdir /absolute/path/to/runs/my_experiment/20260617_143022_TBcartpole_single_2020
 ```
 
 **Step 3 — Open browser:**
@@ -102,7 +123,7 @@ Click **Scalars** to see training loss and reward curves. TensorBoard refreshes 
 | `eval_env/task_N/prediction_error` | Scalars | How accurately the dynamics model predicts the next state during MPC rollouts — drops as the model improves |
 | `eval_env/task_N/episode_time` | Scalars | Average time in seconds to complete one evaluation episode — reflects MPC planning cost |
 | `train_env/task_N/koz_violations` | Scalars | Number of keep-out zone violations per episode — should go to zero as the agent learns |
-| `train_env/task_N/theta_margin` | Scalars | Distance of the camera to the forbidden zone boundary every step — positive = safe, below -1/3 = violation |
+| `train_env/task_N/theta_margin` | Scalars | Distance of the camera from the forbidden zone boundary every step — positive = safe, below -1/3 = violation |
 | `train_env/task_N/attitude_error_deg` | Scalars | Attitude error in degrees every step — how far the satellite is from the target pointing direction, should decrease over training |
 | `eval_env/task_N/koz_violations` | Scalars | Mean number of keep-out zone violations per evaluation episode — measures safety filter effectiveness in evaluation |
 | `eval_env/task_N/state_mean` | Histograms | Mean (μ = average) of each state dimension across collected data |
@@ -113,3 +134,5 @@ Click **Scalars** to see training loss and reward curves. TensorBoard refreshes 
 | `eval_env/task_N/rollout_diff` | Images | Bar chart of open-loop prediction error per state dimension over the planning horizon |
 
 > **Tip:** Always use `--savepath` with an absolute path in the `tensorboard --logdir` argument to avoid path confusion.
+
+> **Tip:** `--play` and resume automatically find the most recent run directory for the given `--env`, `--method`, and `--seed` combination inside `--savepath`. If you have multiple runs and want to replay a specific one, pass its full timestamped path as `--savepath`.
