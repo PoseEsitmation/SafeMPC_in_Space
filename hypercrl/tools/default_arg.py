@@ -200,7 +200,7 @@ def HP(env, seed=None, save_folder='./runs/lqr'):
         return default_arg_pusher_rot(hparams)
     elif env == "pusher_slide":
         return default_arg_pusher_slide(hparams)
-    elif env == "spaceEnv" or env.startswith("spaceEnv_"):
+    elif env in ("spaceEnv", "spaceEnv_moi"):
         return default_arg_sat(hparams)
 
 def default_arg_metaworld10(hparams):
@@ -999,7 +999,7 @@ def default_arg_sat(hparams):
     hparams.out_dim = hparams.state_dim
 
     # Tasks
-    hparams.num_tasks = 1
+    hparams.num_tasks = 4
     hparams.init_rand_steps = 1000
     hparams.max_iteration = 50000
     hparams.dynamics_update_every = 1000
