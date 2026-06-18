@@ -34,16 +34,16 @@ python main.py run --method METHOD --env ENV
 
 ### Environments
 
+### Environments
+
 | Environment         | Description                       |
 | ------------------- | --------------------------------- |
-| `cartpole`          | Cartpole balancing                                                                               |
-| `half_cheetah_body` | Half-cheetah with body variations                                                                |
-| `pusher`            | Pusher manipulation task                                                                         |
-| `door_pose`         | Door opening task                                                                                |
-| `spaceEnv`          | Satellite attitude control with KOZ — initial error 80°–180°, standard penalty (β=10, α=66)     |
-| `spaceEnv_easy`     | Same as `spaceEnv` but small initial error (10°–45°) — easier slew task                         |
-| `spaceEnv_hard`     | Large initial error (90°–180°) + 5× stronger KOZ penalty (β=50, α=100) — harder constraint task |
-| `spaceEnv_weak`     | Half thruster power (0.5 Nm) — simulates a low-torque spacecraft                                |
+| `cartpole`          | Cartpole balancing                |
+| `half_cheetah_body` | Half-cheetah with body variations |
+| `pusher`            | Pusher manipulation task          |
+| `door_pose`         | Door opening task                 |
+| `spaceEnv`          | Satellite attitude control with KOZ — 4 tasks: default, easy, hard, weak thruster               |
+| `spaceEnv_moi`      | Satellite attitude control with KOZ — 4 tasks with different moment of inertia tensors                                  |
 
 > **Tip:** The space environment can be configured by these parameters via constructer arguments.
 
@@ -125,7 +125,9 @@ Click **Scalars** to see training loss and reward curves. TensorBoard refreshes 
 | `train_env/task_N/koz_violations` | Scalars | Number of keep-out zone violations per episode — should go to zero as the agent learns |
 | `train_env/task_N/theta_margin` | Scalars | Distance of the camera from the forbidden zone boundary every step — positive = safe, below -1/3 = violation |
 | `train_env/task_N/attitude_error_deg` | Scalars | Attitude error in degrees every step — how far the satellite is from the target pointing direction, should decrease over training |
+| `train_env/task_N/control_effort` | Scalars | Control effort E(t_end) = ∫‖τ‖² dt per training episode [N²m²s] — total torque energy expended; lower means more efficient reorientation |
 | `eval_env/task_N/koz_violations` | Scalars | Mean number of keep-out zone violations per evaluation episode — measures safety filter effectiveness in evaluation |
+| `eval_env/task_N/control_effort` | Scalars | Mean control effort E(t_end) = ∫‖τ‖² dt over evaluation episodes [N²m²s] used to compare maneuver efficiency across tasks |
 | `eval_env/task_N/state_mean` | Histograms | Mean (μ = average) of each state dimension across collected data |
 | `eval_env/task_N/state_std` | Histograms | Std (standard deviation = how spread out values are) of each state dimension — grows if agent explores new states |
 | `eval_env/task_N/action_mean` | Histograms | Mean (μ = average) of each action dimension across collected data |

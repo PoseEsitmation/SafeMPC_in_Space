@@ -500,7 +500,7 @@ def run(hparams):
                 x_t, _ = env.reset()
                 agent.reset()
   
-            logger.env_step(x_tt, reward, done, info, task_id)
+            logger.env_step(x_tt, reward, done, info, task_id, action=u_t)
 
         augment_model_after(task_id, mnet, hnet, hparams, collector)
 
