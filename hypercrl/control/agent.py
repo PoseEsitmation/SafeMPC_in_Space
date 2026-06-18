@@ -84,6 +84,10 @@ class MPC(Agent):
         self.device = hparams.device
         self.out_var: bool = hparams.out_var
         self.normalize_xu: bool = hparams.normalize_xu if collector is not None else False
+        self.normalize_diff: bool = (
+            getattr(hparams, "normalize_diff", False)
+            and collector is not None and self.dnn_out == "diff"
+        )
         self.gt_dynamic: bool = hparams.gt_dynamic
         self.control_type: str = hparams.control
 
@@ -151,6 +155,10 @@ class MPC(Agent):
             x_mu, x_std, a_mu, a_std = self.collector.norm(task_id)
             self.x_mu, self.x_std = x_mu.to(self.device), x_std.to(self.device)
             self.a_mu, self.a_std = a_mu.to(self.device), a_std.to(self.device)
+        if self.normalize_diff and self.collector is not None \
+                and task_id in getattr(self.collector, "diff_norms", {}):
+            dx_mu, dx_std = self.collector.norm_diff(task_id)
+            self.dx_mu, self.dx_std = dx_mu.to(self.device), dx_std.to(self.device)
 
     def _dynamics(self, x: torch.Tensor, u: torch.Tensor,
                   task_id: Optional[int]) -> torch.Tensor:
@@ -216,6 +224,11 @@ class MPC(Agent):
         if self.dnn_out != "diff" and self.normalize_xu:
             xx = xx * self.x_std + self.x_mu
 
+        # Un-normalize the predicted diff back to obs-diff space (the model was
+        # trained on diffs scaled by their per-dim std; mirror of get_dataset)
+        if self.dnn_out == "diff" and self.normalize_diff:
+            xx = xx * self.dx_std + self.dx_mu
+
         # Compensate diff
         if self.env_name in ["half_cheetah_body", "half_cheetah_safe", "hopper"] and self.dnn_out == "diff":
             xx = torch.cat((xx[:, 0:1], xcopy[:, 1:] + xx[:, 1:]), dim=-1)
@@ -227,6 +240,17 @@ class MPC(Agent):
             ), dim=-1)
         elif self.dnn_out == "diff":
             xx = xcopy + xx
+            if self.env_name.startswith("spaceEnv"):
+                # Re-normalise the error quaternion (obs indices 0-3) so that
+                # qe_0 stays in [-1,1] after multi-step rollout; without this,
+                # qe_0 overflows 1.0, gets clamped, and err_phi collapses to 0
+                # for every trajectory, making CEM unable to rank them.
+                q = xx[:, 0:4]
+                q = q / q.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+                # qe_0_prev (obs index 12) must equal qe_0 of the *previous*
+                # step (xcopy[:,0]).  The model approximates this, but explicit
+                # assignment is exact and avoids accumulated error.
+                xx = torch.cat([q, xx[:, 4:12], xcopy[:, 0:1]], dim=-1)
 
         if self.gt_dynamic:
             print((xx_gt - xx).mean(dim=0))

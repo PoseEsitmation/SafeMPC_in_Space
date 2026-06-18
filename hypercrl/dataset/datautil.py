@@ -80,6 +80,13 @@ class DataCollector():
         self.fig = None
         self.next_mode: str = hparams.dnn_out
         self.normalize_xu: bool = hparams.normalize_xu
+        # Normalize the diff target by its per-dimension std (diff mode only).
+        # Essential for stiff systems (e.g. the satellite env) where per-step
+        # changes in some dims (omega) are far smaller than in others, so the
+        # joint MSE otherwise ignores the small-diff dims and the model learns
+        # to predict ~0 for them.
+        self.normalize_diff: bool = getattr(hparams, "normalize_diff", False)
+        self.diff_norms: Dict[int, Tuple] = {}
         self.env_name: str = hparams.env
 
     def num_tasks(self):
@@ -164,6 +171,9 @@ class DataCollector():
                     self.x_aggregate[task_id], x_t)
                 self.a_aggregate[task_id] = self.update(
                     self.a_aggregate[task_id], u)
+            if getattr(self, "normalize_diff", False) and self.next_mode == "diff":
+                self.dx_aggregate[task_id] = self.update(
+                    self.dx_aggregate[task_id], x_tt)
         else:
             self.states[task_id] = [x_t]
             self.actions[task_id] = [u]
@@ -173,6 +183,8 @@ class DataCollector():
             if self.normalize_xu:
                 self.x_aggregate[task_id] = self.update((0, 0, 0), x_t)
                 self.a_aggregate[task_id] = self.update((0, 0, 0), u)
+            if getattr(self, "normalize_diff", False) and self.next_mode == "diff":
+                self.dx_aggregate[task_id] = self.update((0, 0, 0), x_tt)
 
         # Train or val
         is_train = (random.random() <= 0.75)
@@ -205,10 +217,21 @@ class DataCollector():
 
         self.norms[task_id] = (x_mu, x_std, a_mu, a_std)
 
+        if getattr(self, "normalize_diff", False) and self.next_mode == "diff" \
+                and task_id in self.dx_aggregate:
+            dx_mu, dx_std = one(self.dx_aggregate[task_id])
+            # Center diffs at 0 so x_{t+1} = x_t + pred maps back cleanly;
+            # only rescale by the per-dim std.
+            dx_mu = torch.zeros_like(dx_mu)
+            self.diff_norms[task_id] = (dx_mu, dx_std)
+
         return self.norms[task_id]
 
     def norm(self, task_id: int) -> Tuple:
         return self.norms[task_id]
+
+    def norm_diff(self, task_id: int) -> Tuple:
+        return self.diff_norms[task_id]
 
     def get_safety_values(
         self, task_id: int
@@ -237,6 +260,9 @@ class DataCollector():
             actions = (actions - a_mu) / a_std
             if self.next_mode != "diff":
                 nexts = (nexts - x_mu) / x_std
+            elif getattr(self, "normalize_diff", False):
+                dx_mu, dx_std = self.diff_norms[task_id]
+                nexts = (nexts - dx_mu) / dx_std
 
         train_inds = self.train_inds[task_id]
         val_inds = self.val_inds[task_id]

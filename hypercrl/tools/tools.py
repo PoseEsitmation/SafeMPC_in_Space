@@ -360,15 +360,19 @@ class MonitorRL(MonitorBase):
         self.env_iter += 1
         self.rewards.append(reward)
 
-        # state[7] is how far the camera is from the forbidden zone (normalized).
-        # positive = safe, zero = at boundary, below -1/3 = camera inside forbidden zone (violation)
+        # state[7] is the NORMALISED keep-out-zone margin (obs space, range [-1, 1]).
+        # The env maps raw theta_margin [-pi/2, pi] -> [-1, 1], so the physical
+        # boundary (raw margin = 0) is at normalised value -1/3, NOT 0. Log the
+        # physical margin in degrees so the plot is interpretable and consistent
+        # with koz_violations: >0 = boresight outside KOZ (safe), <0 = inside (violation).
         if self.hparams.env.startswith("spaceEnv") and state is not None:
+            theta_margin_deg = np.degrees((state[7] + 1.0) * (3 * np.pi / 4) - np.pi / 2)
             self.writer.add_scalar(
-                f'train_env/task_{task_id}/theta_margin', state[7], self.env_iter)
+                f'train_env/task_{task_id}/theta_margin_deg', theta_margin_deg, self.env_iter)
             att_err_deg = 2 * np.degrees(np.arccos(np.clip(np.abs(state[0]), 0.0, 1.0)))
             self.writer.add_scalar(
                 f'train_env/task_{task_id}/attitude_error_deg', att_err_deg, self.env_iter)
-            if state[7] < -1/3:
+            if theta_margin_deg < 0:  # equivalent to normalised state[7] < -1/3
                 self.koz_violations+=1
             
 

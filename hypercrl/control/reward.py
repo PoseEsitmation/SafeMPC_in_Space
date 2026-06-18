@@ -212,7 +212,19 @@ class GTCost():
                 torch.full_like(theta_margin, 10.0),
                 10.0 * torch.exp(-66.0 * theta_margin),
             )
-            reward = attitude_reward - 0.05 * torque_norm - penalty_koz
+            # progress penalty: -1 when attitude error increases (matches env)
+            # x[:, 12] = qe_0_prev (set explicitly during planning rollouts)
+            qe_0_prev = torch.clamp(x[:, 12], -1.0, 1.0)
+            err_phi_prev = 2.0 * torch.acos(qe_0_prev)
+            progress_penalty = (err_phi > err_phi_prev).float()
+            # goal bonus: +9 when within 0.25 deg (matches env reward)
+            goal_bonus = torch.where(
+                err_phi <= 0.25 * np.pi / 180.0,
+                torch.full_like(err_phi, 9.0),
+                torch.zeros_like(err_phi),
+            )
+            reward = (attitude_reward - 0.05 * torque_norm - penalty_koz
+                      - progress_penalty + goal_bonus)
             cost = -reward
         return cost
 

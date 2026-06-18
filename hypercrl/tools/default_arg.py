@@ -1008,6 +1008,11 @@ def default_arg_sat(hparams):
     # Common Dynamics Model
     hparams.dnn_out = "diff"
     hparams.normalize_xu = True
+    # Satellite dynamics are stiff: per-step omega/quaternion changes are
+    # orders of magnitude smaller than theta changes. Without normalizing the
+    # diff target the model ignores omega entirely (R^2 < 0) and the planner
+    # has no usable action->state signal. See datautil.normalize_diff.
+    hparams.normalize_diff = True
     hparams.h_dims = [256, 256]
     hparams.out_var = False
 

@@ -164,7 +164,17 @@ class CEM():
             state = torch.tensor(state)
         state = state.to(dtype=self.dtype, device=self.d)
 
-        self.reset()
+        if self.mean is None:
+            self.reset()
+        else:
+            # Warm-start: shift the optimal plan from the previous step forward by one
+            # action, dropping the executed action and padding the last slot with zero.
+            # reset() is called at episode boundaries by the agent, not here.
+            self.mean = torch.cat([
+                self.mean[self.nu:],
+                torch.zeros(self.nu, device=self.d, dtype=self.dtype),
+            ])
+            self.std = torch.ones(self.T * self.nu, device=self.d, dtype=self.dtype) * self.init_cov_diag
 
         for m in range(self.M):
             top_samples = self._sample_top_trajectories(state, self.num_elite, task_id)
