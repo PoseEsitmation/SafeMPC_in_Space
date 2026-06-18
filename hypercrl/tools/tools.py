@@ -373,8 +373,17 @@ class MonitorRL(MonitorBase):
             self.writer.add_scalar(
                 f'train_env/task_{task_id}/attitude_error_deg', att_err_deg, self.env_iter)
             if theta_margin_deg < 0:  # equivalent to normalised state[7] < -1/3
-                self.koz_violations+=1
-            
+                self.koz_violations += 1
+
+        if self.hparams.env == "half_cheetah_safe" and info is not None:
+            if info.get('keep_out_violation'):
+                self.koz_violations += 1
+                print(
+                    f"[KOZ] Task {task_id}, step {self.env_iter}: "
+                    f"cheetah entered keep-out zone at x={info.get('violated_at', float('nan')):.2f}"
+                )
+            elif info.get('flipped'):
+                print(f"[FLIP] Task {task_id}, step {self.env_iter}: cheetah flipped over")
 
         if done:
             eprew = sum(self.rewards)
@@ -383,7 +392,7 @@ class MonitorRL(MonitorBase):
                 f'train_env/task_{task_id}/reward', eprew, self.env_iter)
             self.writer.add_scalar(
                 f'train_env/task_{task_id}/episode_length', eplen, self.env_iter)
-            if self.hparams.env.startswith("spaceEnv"):
+            if self.hparams.env.startswith("spaceEnv") or self.hparams.env == "half_cheetah_safe":
                 self.writer.add_scalar(
                     f'train_env/task_{task_id}/koz_violations', self.koz_violations, self.env_iter)
                 self.koz_violations = 0
@@ -448,6 +457,12 @@ class MonitorRL(MonitorBase):
             self.writer.add_scalar(
                 f'{prefix}/min_zone_dist',
                 float(info['min_zone_dist']),
+                self.env_iter,
+            )
+        if 'flipped' in info:
+            self.writer.add_scalar(
+                f'{prefix}/flipped',
+                float(info['flipped']),
                 self.env_iter,
             )
 
@@ -574,6 +589,8 @@ class MonitorRL(MonitorBase):
                 done = terminated or truncated
                 if self.hparams.env.startswith("spaceEnv") and x_tt[7] < -1/3:
                     koz_violations += 1
+                if self.hparams.env == "half_cheetah_safe" and info.get('keep_out_violation'):
+                    koz_violations += 1
                 xs.append(x_t)
                 us.append(u_t)
                 x_t = x_tt
@@ -653,7 +670,7 @@ class MonitorRL(MonitorBase):
             self.writer.add_scalar(f'eval_env/task_{tid}/reward', eprew, self.env_iter)
             self.writer.add_scalar(f'eval_env/task_{tid}/prediction_error', l1_pred_diff, self.env_iter)
             self.writer.add_scalar(f'eval_env/task_{tid}/episode_time', mean_time, self.env_iter)
-            if self.hparams.env.startswith("spaceEnv"):
+            if self.hparams.env.startswith("spaceEnv") or self.hparams.env == "half_cheetah_safe":
                 self.writer.add_scalar(
                     f'eval_env/task_{tid}/koz_violations', np.mean(koz_viol_list), self.env_iter)
 

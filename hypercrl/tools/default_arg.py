@@ -103,16 +103,33 @@ class Hparams():
         
         return hparams
 
+def default_arg_policy(hparams):
+    """Policy network (imitation learning) hyperparameters, shared across envs."""
+    hparams.policy_lr           = 1e-4
+    hparams.policy_bs           = 128
+    hparams.policy_train_iters  = 1000   # training iterations per dynamics update
+    hparams.policy_lambda_imit  = 1.0    # weight on imitation (BC) loss
+    hparams.policy_lambda_cbf   = 0.0    # weight on CBF penalty loss (Eq. 16)
+    hparams.policy_lambda_clf   = 0.0    # weight on CLF penalty loss (Eq. 17)
+    hparams.policy_train_start  = 0      # MPC steps before policy training begins
+    hparams.dagger_every        = 0      # run DAGGER every N MPC steps (0 = disabled)
+    hparams.dagger_n_iter       = 5      # number of DAGGER refinement iterations total
+    hparams.dagger_n_rollout    = 5      # rollout episodes per DAGGER iteration
+    return hparams
+
+
 def default_arg_half_cheetah_safe(hparams):
-    hparams.state_dim = 18
+    hparams.state_dim = 19  # 18 base + x_pos appended at obs[18]
     hparams.control_dim = 6
     hparams.out_dim = hparams.state_dim
+    hparams.policy_lambda_cbf = 1e-4   # activate CBF loss (x_pos now in obs)
 
     # Tasks
     hparams.num_tasks = 3
     hparams.max_iteration = 100000          # was 100000 3000 
     hparams.init_rand_steps = 10000         # was 10000  400
     hparams.dynamics_update_every = 1000   # was 1000   200
+    hparams.policy_train_start = 1000      # skip first policy round (random-data only)
 
     # Dynamics model
     hparams.dnn_out = "diff"
@@ -167,6 +184,9 @@ def HP(env, seed=None, save_folder='./runs/lqr'):
     else "cpu"
     )
     
+    # Policy (imitation learning) hyperparams — applied to every env
+    hparams = default_arg_policy(hparams)
+
     if env == "lqr":
         return default_arg_2d_car(hparams)
     elif env == "lqr10":
@@ -1001,9 +1021,10 @@ def default_arg_sat(hparams):
 
     # Tasks
     hparams.num_tasks = 4
-    hparams.init_rand_steps = 1000
+    hparams.init_rand_steps = 3000       # was 1000 — more random data before MPC
     hparams.max_iteration = 50000
     hparams.dynamics_update_every = 1000
+    hparams.policy_train_start = 3000    # skip policy training until MPC has 2 updates of data
 
     # Common Dynamics Model
     hparams.dnn_out = "diff"
@@ -1045,5 +1066,10 @@ def default_arg_sat(hparams):
     hparams.pddm_beta = 0.7
     hparams.pddm_kappa = 20
     hparams.mag_noise = 1.0
+    hparams.policy_lambda_cbf = 1e-4   # activate CBF loss (theta_margin in obs[7])
+    hparams.policy_lambda_clf = 1e-5   # activate CLF loss (attitude error penalty)
+    hparams.dagger_every      = 5000   # run DAGGER every 5000 MPC steps
+    hparams.dagger_n_iter     = 5      # total DAGGER iterations across the run
+    hparams.dagger_n_rollout  = 5      # rollout episodes per DAGGER iteration
 
     return hparams
