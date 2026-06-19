@@ -313,7 +313,7 @@ class SatDynEnv(gym.Env):
         self.steps += 1
         done = self.steps >= self.max_steps
 
-        return self._normalise(), reward, done, False, {}
+        return self._normalise(), reward, done, False, {"keep_out_violation": bool(theta_margin < 0)}
 
 
     def render(self):

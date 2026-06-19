@@ -22,6 +22,7 @@ import logging
 import math
 from typing import Callable, List, Optional, Tuple
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -147,18 +148,26 @@ class PolicyTrainer:
             loss = self.lambda_imit * loss_imit
 
             # --- CBF loss (Eq. 16) ---
+            cbf_viol_frac = torch.zeros(1)
+            cbf_mean_margin = torch.zeros(1)
             if self.cbf_fn is not None and self.lambda_cbf > 0.0:
                 h_dot = self.cbf_fn(x, u_pred)
                 loss_cbf = torch.mean(torch.clamp(-h_dot, min=0.0) ** 2)
                 loss = loss + self.lambda_cbf * loss_cbf
+                with torch.no_grad():
+                    cbf_viol_frac   = (h_dot < 0).float().mean()
+                    cbf_mean_margin = h_dot.mean()
             else:
                 loss_cbf = torch.zeros(1)
 
             # --- CLF loss (Eq. 17) ---
+            clf_viol_frac = torch.zeros(1)
             if self.clf_fn is not None and self.lambda_clf > 0.0:
                 v_dot = self.clf_fn(x, u_pred)
                 loss_clf = torch.mean(torch.clamp(v_dot, min=0.0) ** 2)
                 loss = loss + self.lambda_clf * loss_clf
+                with torch.no_grad():
+                    clf_viol_frac = (v_dot > 0).float().mean()
             else:
                 loss_clf = torch.zeros(1)
 
@@ -171,10 +180,13 @@ class PolicyTrainer:
             self._step += 1
 
             if writer is not None and self._step % 200 == 0:
-                writer.add_scalar("policy/loss_imit",  loss_imit.item(),  self._step)
-                writer.add_scalar("policy/loss_cbf",   loss_cbf.item(),   self._step)
-                writer.add_scalar("policy/loss_clf",   loss_clf.item(),   self._step)
-                writer.add_scalar("policy/loss_total", loss.item(),       self._step)
+                writer.add_scalar("policy/loss_imit",         loss_imit.item(),        self._step)
+                writer.add_scalar("policy/loss_cbf",          loss_cbf.item(),         self._step)
+                writer.add_scalar("policy/loss_clf",          loss_clf.item(),         self._step)
+                writer.add_scalar("policy/loss_total",        loss.item(),             self._step)
+                writer.add_scalar("policy/cbf_viol_frac",     cbf_viol_frac.item(),    self._step)
+                writer.add_scalar("policy/cbf_mean_margin",   cbf_mean_margin.item(),  self._step)
+                writer.add_scalar("policy/clf_viol_frac",     clf_viol_frac.item(),    self._step)
 
         mean_loss = total / self.n_iters
         logger.info("policy training — mean loss %.5f over %d iters", mean_loss, self.n_iters)
@@ -361,29 +373,108 @@ def make_cheetah_cbf_fn(
 def make_space_cbf_fn(
     x_mu: torch.Tensor,
     x_std: torch.Tensor,
+    a_mu: torch.Tensor,
+    a_std: torch.Tensor,
+    inertia,               # (3,3) array-like
+    gamma: float = 0.5,
 ) -> Callable:
-    """Return a differentiable CBF fn for SatDynEnv (spaceEnv).
+    """Differentiable H_dot(x,u) + γH(x) for SatDynEnv (paper Eq. 5-7).
 
-    State index [7] = theta_margin_norm (range [-1, 1] by env convention):
-        physical theta_margin = (norm + 1) * (3π/4) - π/2
-        positive ⇒ boresight outside KOZ (safe)
-        negative ⇒ inside KOZ (violation)
+    Returns the full CBF condition value per sample:
+        positive ⇒ constraint satisfied (no penalty)
+        negative ⇒ violation (loss term penalises this squared)
 
-    The stored training states are further normalised by (x_mu, x_std), so
-    we denormalise index [7] before converting to physical radians.
-
-    Because theta_margin does not depend on the action in a closed form
-    (it would require rolling the dynamics forward), we return the current-
-    state barrier value as H.  This penalises the policy for visiting states
-    near or inside the KOZ, which encourages it to stay well clear.
+    State layout (collector-normalised, 13-dim):
+        [0:4]  q_e (error quaternion, scalar-first)
+        [4:7]  omega_norm  (physical: * 5 rad/s)
+        [7]    theta_margin_norm  (physical: (v+1)*3π/4 - π/2)
+        [8]    theta_norm         (physical: (v+1)*π/2)
+        [9:12] rel_avoid_b  (unit direction: (avoid_b - boresight) / |…|)
     """
-    mu7  = float(x_mu.flatten()[7])
-    std7 = float(x_std.flatten()[7])
+    import numpy as _np
+    _PI = math.pi
+    _SCALE_TORQUE = 2.0
+    _SCALE_OMEGA  = 5.0
+    _U_MAX = _SCALE_TORQUE * math.sqrt(3.0)
 
-    def cbf_fn(state_norm: torch.Tensor, _: torch.Tensor) -> torch.Tensor:
-        theta_margin_norm = state_norm[:, 7] * std7 + mu7
-        theta_margin = (theta_margin_norm + 1.0) * (3.0 * math.pi / 4.0) - math.pi / 2.0
-        return theta_margin   # positive ⇒ safe; negative ⇒ KOZ violation
+    I_np    = _np.array(inertia, dtype=_np.float64)
+    I_inv_np = _np.linalg.inv(I_np)
+    I_t     = torch.tensor(I_np,    dtype=torch.float32)
+    I_inv_t = torch.tensor(I_inv_np, dtype=torch.float32)
+    _bore   = torch.tensor([1.0, 0.0, 0.0], dtype=torch.float32)
+
+    x_mu_f = x_mu.flatten()
+    x_std_f = x_std.flatten()
+    a_mu_f = a_mu.flatten()
+    a_std_f = a_std.flatten()
+
+    def _cross(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        return torch.stack([
+            a[:, 1]*b[:, 2] - a[:, 2]*b[:, 1],
+            a[:, 2]*b[:, 0] - a[:, 0]*b[:, 2],
+            a[:, 0]*b[:, 1] - a[:, 1]*b[:, 0],
+        ], dim=1)
+
+    def cbf_fn(state_norm: torch.Tensor, action_norm: torch.Tensor) -> torch.Tensor:
+        dev  = state_norm.device
+        I    = I_t.to(dev)
+        Ii   = I_inv_t.to(dev)
+        bore = _bore.to(dev).unsqueeze(0)          # (1, 3)
+
+        # Undo collector normalisation → env-normalised obs
+        obs = state_norm * x_std_f.to(dev) + x_mu_f.to(dev)
+
+        # Physical quantities
+        omega  = obs[:, 4:7] * _SCALE_OMEGA                            # (B, 3) rad/s
+        h      = (obs[:, 7:8] + 1.0) * (3.0*_PI/4.0) - _PI/2.0       # (B, 1) rad
+        theta  = (obs[:, 8:9] + 1.0) * (_PI / 2.0)                    # (B, 1) rad
+        rel_av = obs[:, 9:12]                                           # (B, 3)
+
+        # Recover avoid_in_b from stored rel_avoid_b
+        half_sin = (theta / 2.0).sin()                                  # (B, 1)
+        av_b = bore + 2.0 * half_sin * rel_av
+        av_b = av_b / av_b.norm(dim=1, keepdim=True).clamp(min=1e-9)   # (B, 3)
+
+        sin_t   = theta.sin().squeeze(1).clamp(min=1e-6)               # (B,)
+        cos_t   = theta.cos().squeeze(1)                                # (B,)
+        bore_b  = bore.expand_as(av_b)
+
+        # c_perp = boresight × avoid_in_b,  |c_perp| = sin(theta)
+        c_perp = _cross(bore_b, av_b)                                   # (B, 3)
+
+        # h_dot = -ω · c_perp / sin(theta)
+        h_dot = -(omega * c_perp).sum(dim=1) / sin_t                   # (B,)
+        h     = h.squeeze(1)                                            # (B,)
+
+        # H(x) = h + |ḣ|·ḣ / (2·U_MAX)
+        H_val = h + h_dot.abs() * h_dot / (2.0 * _U_MAX)              # (B,)
+
+        # Drift: ω_dot_f = I⁻¹(−ω × Iω)
+        Iw           = omega @ I.T                                      # (B, 3)
+        omega_dot_f  = (-_cross(omega, Iw)) @ Ii.T                     # (B, 3)
+
+        # dc_perp/dt = boresight × (−ω × avoid_in_b)
+        dc_perp_dt = _cross(bore_b, -_cross(omega, av_b))              # (B, 3)
+
+        # ḧ drift = −(ω_dot_f·c_perp + ω·dc_perp_dt)/sinθ + ḣ·cosθ·ḣ/sin²θ
+        num       = (omega_dot_f * c_perp).sum(dim=1) + (omega * dc_perp_dt).sum(dim=1)
+        hdd_drift = -num / sin_t + h_dot * cos_t * h_dot / sin_t.pow(2)  # (B,)
+
+        # ḧ linear-in-u coefficient: g = −(I⁻¹ c_perp)·τ_scale / sinθ
+        # Physical torque = u_raw * _SCALE_TORQUE, so g already absorbs τ_scale.
+        g_hdd = -(c_perp @ Ii.T) * _SCALE_TORQUE / sin_t.unsqueeze(1)  # (B, 3)
+
+        # Undo collector norm → raw action in [-1,1]³
+        u_raw = action_norm * a_std_f.to(dev) + a_mu_f.to(dev)         # (B, 3)
+
+        # Ḣ(x,u) = ḣ + |ḣ|/U_MAX · (ḧ_drift + g·u_raw)
+        H_dot = (
+            h_dot
+            + h_dot.abs() / _U_MAX * hdd_drift
+            + h_dot.abs() / _U_MAX * (g_hdd * u_raw).sum(dim=1)
+        )                                                                # (B,)
+
+        return H_dot + gamma * H_val   # ≥ 0 ⇒ safe
 
     return cbf_fn
 
@@ -391,45 +482,89 @@ def make_space_cbf_fn(
 def make_space_clf_fn(
     x_mu: torch.Tensor,
     x_std: torch.Tensor,
+    a_mu: torch.Tensor,
+    a_std: torch.Tensor,
+    inertia,               # (3,3) array-like
     c_q: float = 1.0,
     c_w: float = 0.1,
+    zeta_min: float = 0.001,
+    zeta_max: float = 0.06,
+    j: float = 1.0,
+    c: float = 2.0,
     scale_omega: float = 5.0,
 ) -> Callable:
-    """Return a differentiable CLF fn for SatDynEnv (spaceEnv).
+    """Differentiable V_dot(x,u) + ζ(x)V(x) for SatDynEnv (paper Eq. 11-13).
 
-    V(x) = c_q·‖q_e_vec‖² + c_w·‖omega‖²
+    Returns the CLF condition value per sample:
+        positive ⇒ stability constraint violated (loss penalises this squared)
+        ≤ 0       ⇒ constraint satisfied
 
-    Training states are preprocessed + normalised by (x_mu, x_std).  The
-    spaceEnv falls into the `else` branch of preprocess() — no cos/sin
-    transforms — so the layout is the same as the raw normalised obs:
-      proc[0:4]  = q_e_norm  (= q_e, quaternion)
-      proc[4:7]  = omega_norm (/ scale_omega)
-      proc[7]    = theta_margin_norm
-      ...
-
-    Returns V per sample (scalar, shape (B,)) — positive far from goal,
-    zero at equilibrium.  The CLF loss penalises whenever V > 0, encouraging
-    the policy to produce actions that drive the satellite toward the goal.
+    The sigmoid decay rate ζ(x) (Eq. 13) is reproduced exactly.
     """
-    x_mu_f  = x_mu.flatten()
+    import numpy as _np
+    _SCALE_TORQUE = 2.0
+
+    I_np     = _np.array(inertia, dtype=_np.float64)
+    I_inv_np = _np.linalg.inv(I_np)
+    I_t      = torch.tensor(I_np,    dtype=torch.float32)
+    I_inv_t  = torch.tensor(I_inv_np, dtype=torch.float32)
+
+    x_mu_f = x_mu.flatten()
     x_std_f = x_std.flatten()
+    a_mu_f = a_mu.flatten()
+    a_std_f = a_std.flatten()
 
-    # Extract per-dim normalisation for q_e_vec (indices 1-3) and omega (4-6)
-    qv_mu   = x_mu_f[1:4]
-    qv_std  = x_std_f[1:4]
-    om_mu   = x_mu_f[4:7]
-    om_std  = x_std_f[4:7]
+    def _cross(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        return torch.stack([
+            a[:, 1]*b[:, 2] - a[:, 2]*b[:, 1],
+            a[:, 2]*b[:, 0] - a[:, 0]*b[:, 2],
+            a[:, 0]*b[:, 1] - a[:, 1]*b[:, 0],
+        ], dim=1)
 
-    def clf_fn(state_norm: torch.Tensor, _: torch.Tensor) -> torch.Tensor:
-        # Denormalise quaternion vector part (indices 1-3 in the stored state)
-        q_e_vec = state_norm[:, 1:4] * qv_std.to(state_norm.device) + qv_mu.to(state_norm.device)
-        # Denormalise angular velocity (indices 4-6) back to rad/s
-        omega = (state_norm[:, 4:7] * om_std.to(state_norm.device) + om_mu.to(state_norm.device)) * scale_omega
+    def clf_fn(state_norm: torch.Tensor, action_norm: torch.Tensor) -> torch.Tensor:
+        dev = state_norm.device
+        I   = I_t.to(dev)
+        Ii  = I_inv_t.to(dev)
 
-        V = (
-            c_q * (q_e_vec ** 2).sum(dim=1)
-            + c_w * (omega ** 2).sum(dim=1)
-        )
-        return V   # positive everywhere except at equilibrium
+        # Undo collector normalisation → env-normalised obs
+        obs = state_norm * x_std_f.to(dev) + x_mu_f.to(dev)
+
+        q_e     = obs[:, 0:4]                                           # (B, 4)
+        omega   = obs[:, 4:7] * scale_omega                             # (B, 3) rad/s
+        q_e0    = q_e[:, 0]                                             # (B,)
+        q_e_vec = q_e[:, 1:4]                                           # (B, 3)
+
+        # V(x) = c_q·‖q_e_vec‖² + c_w·‖ω‖²
+        V_val = c_q * q_e_vec.pow(2).sum(dim=1) + c_w * omega.pow(2).sum(dim=1)  # (B,)
+
+        # Quaternion kinematics drift: dq_e_vec/dt = 0.5·(q_e0·ω + q_e_vec × ω)
+        dqv_dt = 0.5 * (q_e0.unsqueeze(1) * omega + _cross(q_e_vec, omega))      # (B, 3)
+
+        # Euler drift: ω_dot_f = I⁻¹(−ω × Iω)
+        Iw          = omega @ I.T                                        # (B, 3)
+        omega_dot_f = (-_cross(omega, Iw)) @ Ii.T                       # (B, 3)
+
+        # LfV = c_q·2·q_e_vec·dqv_dt + c_w·2·ω·ω_dot_f
+        LfV = (
+            c_q * 2.0 * (q_e_vec * dqv_dt).sum(dim=1)
+            + c_w * 2.0 * (omega * omega_dot_f).sum(dim=1)
+        )                                                                # (B,)
+
+        # LgV = c_w·2·τ_scale·(I⁻¹ᵀ ω)  — coefficient for u_raw ∈ [-1,1]³
+        LgV = c_w * 2.0 * _SCALE_TORQUE * (omega @ Ii)                 # (B, 3)
+
+        # ζ(x) from Eq. 13
+        att_err = 2.0 * torch.acos(q_e0.clamp(-1.0 + 1e-7, 1.0 - 1e-7))  # (B,)
+        zeta = zeta_min + (zeta_max - zeta_min) / (
+            1.0 + torch.exp(torch.tensor(j, device=dev) * (att_err - c))
+        )                                                                # (B,)
+
+        # Undo collector norm → raw action in [-1,1]³
+        u_raw = action_norm * a_std_f.to(dev) + a_mu_f.to(dev)         # (B, 3)
+
+        # V_dot(x,u) = LfV + LgV·u + ζ·V  (≤ 0 ⇒ stability constraint met)
+        V_dot = LfV + (LgV * u_raw).sum(dim=1) + zeta * V_val          # (B,)
+
+        return V_dot   # positive ⇒ CLF constraint violated
 
     return clf_fn

@@ -118,7 +118,7 @@ class SpaceAttitudeCBF(CBF):
 
         return th_marg, h_dot, c_perp, sin_t, omega, av_b
 
-    def _h_dot_dot_f(self, omega, c_perp, sin_t, theta, h_dot) -> float:
+    def _h_dot_dot_f(self, omega, c_perp, sin_t, theta, h_dot, av_b) -> float:
         """Nonlinear (drift) part of ḧ — no u dependence.
 
         ḧ = −(ω_dot_f·c_perp + ω·dc_perp_dt) / sin θ + h_dot·cos θ·h_dot / sin²θ
@@ -126,7 +126,6 @@ class SpaceAttitudeCBF(CBF):
         """
         omega_dot_f = self._I_inv @ (-np.cross(omega, self._I @ omega))
         # dc_perp/dt = boresight × d(avoid_in_b)/dt = boresight × (−ω × avoid_in_b)
-        av_b = _avoid_in_b(theta, np.zeros(3))  # approx — recomputed later if needed
         dc_perp_dt = np.cross(_BORESIGHT_B, -np.cross(omega, av_b))
 
         if sin_t > 1e-6:
@@ -162,7 +161,7 @@ class SpaceAttitudeCBF(CBF):
 
         # Drift part of ḧ
         theta = (obs[8] + 1.0) * (_PI / 2.0)
-        f_h_dot_dot = self._h_dot_dot_f(omega, c_perp, sin_t, theta, h_dot)
+        f_h_dot_dot = self._h_dot_dot_f(omega, c_perp, sin_t, theta, h_dot, av_b)
 
         # Ḣ(x,u) = h_dot + |h_dot| * (f_hdd + g_hdd·u) / u_max
         # Ḣ + γ·H = const + linear_in_u

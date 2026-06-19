@@ -496,15 +496,22 @@ def run(hparams):
 
         print(f"Collecting some random data first for task {task_id}")
         x_t, _ = env.reset()
+        rand_koz_hits = 0
         for it in range(hparams.init_rand_steps):
             u = rand_pi.act(x_t)
-            x_tt, _, terminated, truncated, _ = env.step(u.reshape(env.action_space.shape))
+            x_tt, _, terminated, truncated, info = env.step(u.reshape(env.action_space.shape))
             done = terminated or truncated
+            if info.get("keep_out_violation"):
+                rand_koz_hits += 1
             collector.add(x_t, u, x_tt, task_id)
             x_t = x_tt
             logger.data_aggregate_step(x_tt, task_id, it)
+            logger._log_safety(info, task_id, global_step=it)
             if done:
                 x_t, _ = env.reset()
+        print(f"  [random phase] task {task_id} koz_violations={rand_koz_hits}/{hparams.init_rand_steps}")
+        if logger.writer is not None:
+            logger.writer.add_scalar(f"random_phase/task_{task_id}/koz_violations", rand_koz_hits, task_id)
 
         # Augment Model, instantiate optimizers/regularizer targets
         trainer_misc = augment_model(task_id, mnet, hnet, collector, hparams)
@@ -521,15 +528,19 @@ def run(hparams):
                 print("Training time", time.time() - ts)
 
                 # Rebuild CBF/CLF fns now that per-task norms are finalised.
-                if hparams.env == "half_cheetah_safe":
-                    x_mu, x_std, a_mu, a_std = collector.norm(task_id)
-                    unwrapped = env.unwrapped if hasattr(env, "unwrapped") else env
-                    policy_trainer.cbf_fn = make_cheetah_cbf_fn(
-                        unwrapped.keep_out_zones, x_mu, x_std, a_mu, a_std)
-                elif hparams.env.startswith("spaceEnv"):
-                    x_mu, x_std, _, _ = collector.norm(task_id)
-                    policy_trainer.cbf_fn = make_space_cbf_fn(x_mu, x_std)
-                    policy_trainer.clf_fn = make_space_clf_fn(x_mu, x_std)
+                if getattr(hparams, "policy_use_safety_loss", False):
+                    if hparams.env == "half_cheetah_safe":
+                        x_mu, x_std, a_mu, a_std = collector.norm(task_id)
+                        unwrapped = env.unwrapped if hasattr(env, "unwrapped") else env
+                        policy_trainer.cbf_fn = make_cheetah_cbf_fn(
+                            unwrapped.keep_out_zones, x_mu, x_std, a_mu, a_std)
+                    elif hparams.env.startswith("spaceEnv"):
+                        x_mu, x_std, a_mu, a_std = collector.norm(task_id)
+                        _raw_env = env.unwrapped if hasattr(env, 'unwrapped') else env
+                        policy_trainer.cbf_fn = make_space_cbf_fn(
+                            x_mu, x_std, a_mu, a_std, _raw_env.inertia)
+                        policy_trainer.clf_fn = make_space_clf_fn(
+                            x_mu, x_std, a_mu, a_std, _raw_env.inertia)
 
                 # Train NN policy — wait until MPC has collected meaningful data.
                 if it >= getattr(hparams, "policy_train_start", 0):
@@ -594,9 +605,9 @@ def run(hparams):
     envs.close()
     logger.writer.close()
 
-def chunked_hnet(env, seed=None, savepath=None, play=False, render=False):
+def chunked_hnet(env, seed=None, savepath=None, play=False, render=False, run_name=None):
     # Hyperparameters
-    hparams = HP(env, seed, savepath)
+    hparams = HP(env, seed, savepath, run_name=run_name)
     hparams.model = "chunked_hnet"
     hparams.render = render
 
@@ -608,25 +619,23 @@ def chunked_hnet(env, seed=None, savepath=None, play=False, render=False):
         run(hparams)
 
 
-def hnet(env, seed=None, savepath=None, play=False, render=False, device="cpu"):
+def hnet(env, seed=None, savepath=None, play=False, render=False, device="cpu", run_name=None):
     # Hyperparameters
-    hparams = HP(env, seed, savepath)
+    hparams = HP(env, seed, savepath, run_name=run_name)
     hparams.model = "hnet"
     hparams.render = render
     hparams.device = device
 
     hparams = Hparams.add_hnet_hparams(hparams)
-    
-    print("[DEBUG hnet] BEFORE run:", hparams.device)
 
     if play:
         play_model(hparams)
     else:
         run(hparams)
 
-def hnet_si(env, seed=None, savepath=None, play=False):
+def hnet_si(env, seed=None, savepath=None, play=False, run_name=None):
     # Hyperparameters
-    hparams = HP(env, seed, savepath)
+    hparams = HP(env, seed, savepath, run_name=run_name)
     hparams.model = "hnet_si"
 
     hparams = Hparams.add_hnet_hparams(hparams)
@@ -638,9 +647,9 @@ def hnet_si(env, seed=None, savepath=None, play=False):
     else:
         run(hparams)
 
-def hnet_ewc(env, seed=None, savepath=None, play=False):
+def hnet_ewc(env, seed=None, savepath=None, play=False, run_name=None):
     # Hyperparameters
-    hparams = HP(env, seed, savepath)
+    hparams = HP(env, seed, savepath, run_name=run_name)
     hparams.model = "hnet_ewc"
 
     hparams = Hparams.add_hnet_hparams(hparams)
@@ -653,9 +662,9 @@ def hnet_ewc(env, seed=None, savepath=None, play=False):
     else:
         run(hparams)
 
-def hnet_mt(env, seed=None, savepath=None, play=False, render=False):
+def hnet_mt(env, seed=None, savepath=None, play=False, render=False, run_name=None):
     # Hyperparameters
-    hparams = HP(env, seed, savepath)
+    hparams = HP(env, seed, savepath, run_name=run_name)
     hparams.model = "hnet_mt"
     hparams.render = render
 
@@ -668,9 +677,9 @@ def hnet_mt(env, seed=None, savepath=None, play=False, render=False):
     else:
         run(hparams)
 
-def hnet_replay(env, seed=None, savepath=None, play=False, render=False):
+def hnet_replay(env, seed=None, savepath=None, play=False, render=False, run_name=None):
     # Hyperparameters
-    hparams = HP(env, seed, savepath)
+    hparams = HP(env, seed, savepath, run_name=run_name)
     hparams.model = "hnet_replay"
     hparams.render = render
 

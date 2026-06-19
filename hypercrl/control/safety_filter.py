@@ -100,6 +100,7 @@ class SafetyFilter:
         self.last_V: float = float("nan")
         self.last_was_active: bool = False
         self.last_cbf_slack: float = 0.0
+        self.last_du_norm: float = 0.0   # ‖u_safe − u_proposed‖ — correction magnitude
 
     def filter(self, state: np.ndarray, u_proposed: np.ndarray) -> np.ndarray:
         """Return the safe action closest (in L2) to u_proposed.
@@ -145,10 +146,13 @@ class SafetyFilter:
 
         prob = cp.Problem(cp.Minimize(sum(objective_terms)), constraints)
         try:
-            prob.solve(solver=cp.OSQP, warm_start=True)
+            # CLARABEL handles large coefficient ratios (cbf_rho=1e6 vs O(1) terms)
+            # much better than OSQP's ADMM which hits user_limit on ill-conditioned problems.
+            prob.solve(solver=cp.CLARABEL)
             if prob.status in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE) and u.value is not None:
                 u_safe = u.value.astype(np.float64)
-                self.last_was_active  = float(np.linalg.norm(u_safe - u_ref)) > 1e-4
+                self.last_du_norm     = float(np.linalg.norm(u_safe - u_ref))
+                self.last_was_active  = self.last_du_norm > 1e-4
                 self.last_cbf_slack   = float(delta_cbf.value) if delta_cbf.value is not None else 0.0
                 if self.last_cbf_slack > 1e-4:
                     logger.debug("SafetyFilter CBF slack=%.4f (H=%.4f)", self.last_cbf_slack, self.last_H)
