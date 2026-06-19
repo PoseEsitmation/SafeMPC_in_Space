@@ -8,6 +8,23 @@ A **CBF/CLF safety filter** intercepts every proposed action and solves a small 
 guarantee the satellite never enters the keep-out zone (KOZ), regardless of what the
 learned model predicts.
 
+## Repository layout
+
+```
+SafeMPC_in_Space/
+├── main.py                       # CLI entry point
+├── play.py                       # standalone checkpoint replayer
+├── hypercrl/
+│   ├── envs/space_KOZ.py         # satellite attitude env with KOZ
+│   ├── control/safety_filter.py  # CBF/CLF-QP filter
+│   ├── control/agent.py          # MPC agent
+│   ├── hypercl/                  # hypernetwork (hnet/mnet)
+│   └── model/                    # dynamics model training
+├── scripts/                      # analysis and batch-run helpers
+├── robosuite/                    # local fork of robosuite
+└── DOCS/                         # component and API definitions
+```
+
 ## Installation
 
 **Prerequisites:** Python 3.12+, conda
@@ -102,6 +119,13 @@ python main.py run --method hnet --env spaceEnv --device cpu --seed 42 --savepat
 
 # Replay trained checkpoint
 python main.py run --method hnet --env spaceEnv --seed 42 --savepath ./runs/space --play
+
+# --play finds the most recent run for the given env/method/seed combination.
+# To replay a specific run, pass its full timestamped path as --savepath:
+python main.py run --method hnet --env spaceEnv --savepath ./runs/space/20260617_143022_TBspaceEnv_hnet_42 --play
+
+# Alternatively, use the standalone replayer to point directly at a checkpoint:
+python play.py --savepath ./runs/space/20260617_143022_TBspaceEnv_hnet_42 --env spaceEnv
 ```
 
 ### TensorBoard
