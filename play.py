@@ -209,29 +209,6 @@ def save_replay_stats(folder: str, rows: list[dict]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# video stitching
-# ---------------------------------------------------------------------------
-
-def _stitch_video(folder: str) -> None:
-    frame_dir = os.path.join(os.getcwd(), 'renders', 'spaceEnv')
-    if not os.path.isdir(frame_dir) or not any(f.endswith('.png') for f in os.listdir(frame_dir)):
-        return
-    out = os.path.join(folder, 'replay', 'render.mp4')
-    os.makedirs(os.path.dirname(out), exist_ok=True)
-    cmd = [
-        'ffmpeg', '-y', '-framerate', '20',
-        '-i', os.path.join(frame_dir, 'frame_%05d.png'),
-        '-c:v', 'libx264', '-pix_fmt', 'yuv420p', out,
-    ]
-    import subprocess
-    result = subprocess.run(cmd, capture_output=True)
-    if result.returncode == 0:
-        print(f'[play] video → {out}')
-    else:
-        print('[play] ffmpeg not found — frames saved in', frame_dir)
-
-
-# ---------------------------------------------------------------------------
 # play loop
 # ---------------------------------------------------------------------------
 
@@ -337,7 +314,6 @@ def play(folder: str, tasks: list[int] | None = None, episodes: int = 10) -> Non
 
     envs.close()
     save_replay_stats(folder, stat_rows)
-    _stitch_video(folder)
 
 
 # ---------------------------------------------------------------------------
