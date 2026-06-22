@@ -205,6 +205,8 @@ class PolicyTrainer:
         n_rollout: int = 5,
         max_ep_steps: int = 1000,
         writer=None,
+        a_mu: Optional[np.ndarray] = None,
+        a_std: Optional[np.ndarray] = None,
     ) -> None:
         """One DAGGER refinement iteration (Algorithm 1, lines 7-20).
 
@@ -218,18 +220,24 @@ class PolicyTrainer:
         env : gymnasium.Env
             Live environment (reset() / step() interface).
         mpc_agent :
-            Expert with .act(obs, task_id) → tensor in action space.
+            Expert with .act(obs, task_id) → tensor in physical action space.
         collector :
             DataCollector — new (obs, u_mpc, obs_next) triples are appended.
         task_id : int
         preprocess_fn :
-            Converts a raw normalised numpy obs (state_dim,) to the
-            preprocessed+normalised float tensor (1, proc_dim) on self.device.
+            Converts a raw numpy obs (state_dim,) to the preprocessed+normalised
+            float tensor (1, proc_dim) on self.device.
         n_rollout : int
             Number of rollout episodes per DAGGER iteration.
         max_ep_steps : int
             Truncate episodes at this many steps.
         writer : SummaryWriter or None
+        a_mu, a_std : np.ndarray or None
+            Per-task action normalisation statistics (shape: (action_dim,)).
+            When provided, the policy tanh output (normalised space) is
+            denormalised to physical space before mixing with u_mpc.
+            If None, the policy output is used as-is (only correct when
+            normalize_xu=False).
         """
         self._dagger_iter += 1
         kappa = max(0.0, 1.0 - self._dagger_iter / max(1, getattr(self, "_dagger_n_iter", 5)))
@@ -250,15 +258,20 @@ class PolicyTrainer:
                     u_mpc_t = mpc_agent.act(obs, task_id=task_id)
                 u_mpc = u_mpc_t.detach().cpu().numpy().flatten()
 
-                # NN action (preprocessed + normalised state → normalised action)
+                # NN action: preprocess+normalised state → normalised tanh output
                 with torch.no_grad():
                     x_proc = preprocess_fn(obs)                    # (1, proc_dim)
                     u_nn_t = self.policy(x_proc)                   # (1, action_dim)
                 u_nn = u_nn_t.cpu().numpy().flatten()
 
-                # Mixed policy: κ·u_mpc + (1-κ)·u_nn, clipped to action space
+                # Denormalise NN output to physical space so it can be mixed with
+                # u_mpc (which is already in physical action space).
+                if a_mu is not None and a_std is not None:
+                    u_nn = u_nn * a_std + a_mu
+
+                # Mixed policy in physical space, clipped to env action bounds.
                 u_mix = kappa * u_mpc + (1.0 - kappa) * u_nn
-                u_mix = np.clip(u_mix, -1.0, 1.0)
+                u_mix = np.clip(u_mix, env.action_space.low, env.action_space.high)
 
                 obs_next, _, terminated, truncated, _ = env.step(
                     u_mix.reshape(env.action_space.shape)

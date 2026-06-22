@@ -17,17 +17,17 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # ── colour palette ─────────────────────────────────────────────────────────────
-C_SAFE        = "#2ecc71"
-C_DANGER      = "#e74c3c"
-C_FILTER      = "#f39c12"
-C_IMIT        = "#3498db"
-C_CBF         = "#9b59b6"
-C_CLF         = "#1abc9c"
-C_NN          = "#e67e22"
+C_SAFE = "#2ecc71"
+C_DANGER = "#e74c3c"
+C_FILTER = "#f39c12"
+C_IMIT = "#3498db"
+C_CBF = "#9b59b6"
+C_CLF = "#1abc9c"
+C_NN = "#e67e22"
 C_EVAL_EXPERT = "#27ae60"
-C_VAL         = "#8e44ad"
-BG_RAND       = "#fff0f0"
-BG_TRAIN      = "#f0fff4"
+C_VAL = "#8e44ad"
+BG_RAND = "#fff0f0"
+BG_TRAIN = "#f0fff4"
 
 plt.rcParams.update({
     "font.family":         "DejaVu Sans",
@@ -48,7 +48,7 @@ def load(ea, tag):
     if tag not in ea.Tags().get("scalars", []):
         return np.array([]), np.array([])
     evts = ea.Scalars(tag)
-    return (np.array([e.step  for e in evts], dtype=float),
+    return (np.array([e.step for e in evts], dtype=float),
             np.array([e.value for e in evts], dtype=float))
 
 
@@ -76,9 +76,12 @@ def _savefig(fig, path, dpi):
 
 def draw_safety_timeline(ax_rand, ax_train, d):
     """Broken-axis safety timeline: random phase (left) | training phase (right)."""
-    rand_steps  = d["rand_steps"];  rand_margin = d["rand_margin"]
-    tr_steps    = d["tr_steps"];    tr_margin   = d["tr_margin"]
-    sf_steps3   = d["sf_steps3"];   sf_active   = d["sf_active"]
+    rand_steps = d["rand_steps"]
+    rand_margin = d["rand_margin"]
+    tr_steps = d["tr_steps"]
+    tr_margin = d["tr_margin"]
+    sf_steps3 = d["sf_steps3"]
+    sf_active = d["sf_active"]
 
     # --- random phase ---
     ax_rand.set_facecolor(BG_RAND)
@@ -86,7 +89,8 @@ def draw_safety_timeline(ax_rand, ax_train, d):
         ax_rand.fill_between(rand_steps, rand_margin, 0,
                              where=(rand_margin < 0),
                              color=C_DANGER, alpha=0.35, label="KOZ violation")
-        ax_rand.plot(rand_steps, rand_margin, color=C_DANGER, lw=0.6, alpha=0.7)
+        ax_rand.plot(rand_steps, rand_margin,
+                     color=C_DANGER, lw=0.6, alpha=0.7)
         ax_rand.axhline(0, color=C_DANGER, lw=1.2, ls="--", alpha=0.8,
                         label="KOZ boundary (0°)")
         n_viol = int((rand_margin < 0).sum())
@@ -105,7 +109,8 @@ def draw_safety_timeline(ax_rand, ax_train, d):
     ax_train.set_facecolor(BG_TRAIN)
     if len(tr_steps) > 0:
         ds_s, ds_m = downsample(tr_steps, tr_margin)
-        ax_train.plot(ds_s, ds_m, color=C_SAFE, lw=0.7, alpha=0.8, label="θ margin")
+        ax_train.plot(ds_s, ds_m, color=C_SAFE, lw=0.7,
+                      alpha=0.8, label="θ margin")
         ax_train.plot(ds_s, smooth(ds_m, 80), color=C_SAFE, lw=1.8, alpha=0.95,
                       label="smoothed")
     if len(sf_steps3) > 0:
@@ -132,9 +137,12 @@ def draw_safety_timeline(ax_rand, ax_train, d):
 
 
 def draw_episode_stats(ax, d):
-    tr_ep_s       = d["tr_ep_s"];       tr_ep_margin = d["tr_ep_margin"]
-    tr_ep_ff_s    = d["tr_ep_ff_s"];    tr_ep_ff     = d["tr_ep_ff"]
-    tr_ep_filt_s  = d["tr_ep_filt_s"];  tr_ep_filt   = d["tr_ep_filt"]
+    tr_ep_s = d["tr_ep_s"]
+    tr_ep_margin = d["tr_ep_margin"]
+    tr_ep_ff_s = d["tr_ep_ff_s"]
+    tr_ep_ff = d["tr_ep_ff"]
+    tr_ep_filt_s = d["tr_ep_filt_s"]
+    tr_ep_filt = d["tr_ep_filt"]
 
     if len(tr_ep_s) > 0:
         ax.bar(range(len(tr_ep_margin)), tr_ep_margin,
@@ -167,8 +175,10 @@ def draw_episode_stats(ax, d):
 
 
 def draw_cbf_barrier(ax, d):
-    sf_steps  = d["sf_steps"];  sf_H     = d["sf_H"]
-    sf_steps2 = d["sf_steps2"]; sf_slack = d["sf_slack"]
+    sf_steps = d["sf_steps"]
+    sf_H = d["sf_H"]
+    sf_steps2 = d["sf_steps2"]
+    sf_slack = d["sf_slack"]
 
     if len(sf_steps) > 0:
         ds_s, ds_H = downsample(sf_steps, sf_H)
@@ -187,11 +197,16 @@ def draw_cbf_barrier(ax, d):
 
 
 def draw_policy_losses(ax, d):
-    pol_s   = d["pol_s"];   pol_imit   = d["pol_imit"]
-    pol_s2  = d["pol_s2"];  pol_cbf    = d["pol_cbf"]
-    pol_s3  = d["pol_s3"];  pol_clf    = d["pol_clf"]
-    pol_s4  = d["pol_s4"];  pol_cbf_vf = d["pol_cbf_vf"]
-    pol_s6  = d["pol_s6"];  pol_clf_vf = d["pol_clf_vf"]
+    pol_s = d["pol_s"]
+    pol_imit = d["pol_imit"]
+    pol_s2 = d["pol_s2"]
+    pol_cbf = d["pol_cbf"]
+    pol_s3 = d["pol_s3"]
+    pol_clf = d["pol_clf"]
+    pol_s4 = d["pol_s4"]
+    pol_cbf_vf = d["pol_cbf_vf"]
+    pol_s6 = d["pol_s6"]
+    pol_clf_vf = d["pol_clf_vf"]
 
     if len(pol_s) > 0:
         ax.semilogy(pol_s, pol_imit, color=C_IMIT, lw=1.5, label="L_imit")
@@ -221,11 +236,16 @@ def draw_policy_losses(ax, d):
 
 
 def draw_rewards(ax, d):
-    tr_ep_rew_s = d["tr_ep_rew_s"]; tr_ep_rew = d["tr_ep_rew"]
-    ev_rew_s    = d["ev_rew_s"];    ev_rew    = d["ev_rew"]
-    pev_rew_s   = d["pev_rew_s"];   pev_rew   = d["pev_rew"]
-    ev_koz_s    = d["ev_koz_s"];    ev_koz    = d["ev_koz"]
-    pev_koz_s   = d["pev_koz_s"];   pev_koz   = d["pev_koz"]
+    tr_ep_rew_s = d["tr_ep_rew_s"]
+    tr_ep_rew = d["tr_ep_rew"]
+    ev_rew_s = d["ev_rew_s"]
+    ev_rew = d["ev_rew"]
+    pev_rew_s = d["pev_rew_s"]
+    pev_rew = d["pev_rew"]
+    ev_koz_s = d["ev_koz_s"]
+    ev_koz = d["ev_koz"]
+    pev_koz_s = d["pev_koz_s"]
+    pev_koz = d["pev_koz"]
 
     if len(tr_ep_rew_s) > 0:
         ax.plot(tr_ep_rew_s, tr_ep_rew, "o-", color=C_SAFE,
@@ -261,9 +281,12 @@ def draw_rewards(ax, d):
 
 
 def draw_dagger_curriculum(ax, d):
-    pol_dag_s      = d["pol_dag_s"];      pol_kappa = d["pol_kappa"]
-    pol_dag_lcbf_s = d["pol_dag_lcbf_s"]; pol_lcbf  = d["pol_lcbf"]
-    pol_dag_lclf_s = d["pol_dag_lclf_s"]; pol_lclf  = d["pol_lclf"]
+    pol_dag_s = d["pol_dag_s"]
+    pol_kappa = d["pol_kappa"]
+    pol_dag_lcbf_s = d["pol_dag_lcbf_s"]
+    pol_lcbf = d["pol_lcbf"]
+    pol_dag_lclf_s = d["pol_dag_lclf_s"]
+    pol_lclf = d["pol_lclf"]
 
     if len(pol_dag_s) > 0:
         ax.plot(pol_dag_s, pol_kappa, "o-", color="#2980b9",
@@ -288,10 +311,12 @@ def draw_dagger_curriculum(ax, d):
 
 
 def draw_dynamics_val(ax, d):
-    val_s = d["val_s"]; val_loss = d["val_loss"]
+    val_s = d["val_s"]
+    val_loss = d["val_loss"]
 
     if len(val_s) > 0:
-        ax.semilogy(val_s, val_loss, color=C_VAL, lw=1.8, label="Dynamics val loss")
+        ax.semilogy(val_s, val_loss, color=C_VAL,
+                    lw=1.8, label="Dynamics val loss")
     ax.set_title("Dynamics Model Validation Loss", fontsize=9)
     ax.set_xlabel("Training step")
     ax.set_ylabel("Loss (log)")
@@ -312,29 +337,31 @@ def draw_phase_comparison(fig, d, hp):
         rand_steps+pol_start .. rand_steps+dag_every: BC supervised
         rand_steps+dag_every .. (repeat every dag_every) : DAgger iterations
     """
-    rand_steps  = hp.get("init_rand_steps",    3000)
-    pol_start   = hp.get("policy_train_start", 3000)
-    dag_every   = hp.get("dagger_every",        5000)
-    dag_n       = hp.get("dagger_n_iter",          5)
-    dyn_every   = hp.get("dynamics_update_every", 1000)
+    rand_steps = hp.get("init_rand_steps",    3000)
+    pol_start = hp.get("policy_train_start", 3000)
+    dag_every = hp.get("dagger_every",        5000)
+    dag_n = hp.get("dagger_n_iter",          5)
+    dyn_every = hp.get("dynamics_update_every", 1000)
 
     # ── stitch data onto combined x-axis ─────────────────────────────────────
-    cx_rand = d["rand_steps"]                          # already 0..rand_steps-1
+    # already 0..rand_steps-1
+    cx_rand = d["rand_steps"]
     cy_rand = d["rand_margin"]
 
-    cx_tr   = d["tr_steps"]   + rand_steps             # shift training steps right
-    cy_tr   = d["tr_margin"]
+    cx_tr = d["tr_steps"] + rand_steps             # shift training steps right
+    cy_tr = d["tr_margin"]
 
-    cx_H    = d["sf_steps"]   + rand_steps
-    cy_H    = d["sf_H"]
+    cx_H = d["sf_steps"] + rand_steps
+    cy_H = d["sf_H"]
 
-    cx_du   = d["sf_steps4"]  + rand_steps
-    cy_du   = d["sf_du"]
+    cx_du = d["sf_steps4"] + rand_steps
+    cy_du = d["sf_du"]
 
-    cx_filt = d["sf_steps3"][d["sf_active"] > 0.5] + rand_steps   # filter-active steps
+    cx_filt = d["sf_steps3"][d["sf_active"] > 0.5] + \
+        rand_steps   # filter-active steps
 
     # episode-level: use stored env_iter (already on env_iter axis)
-    cx_ep_margin = d["tr_ep_s"]  + rand_steps
+    cx_ep_margin = d["tr_ep_s"] + rand_steps
     cy_ep_margin = d["tr_ep_margin"]
 
     # DAgger event steps (from eval_env which runs at same cadence as DAgger)
@@ -344,8 +371,8 @@ def draw_phase_comparison(fig, d, hp):
     total_x = rand_steps + (cx_tr.max() if len(cx_tr) > 0 else 1)
 
     # ── phase boundary x-coordinates (combined) ──────────────────────────────
-    b_rand_end  = rand_steps
-    b_bc_start  = rand_steps + pol_start
+    b_rand_end = rand_steps
+    b_bc_start = rand_steps + pol_start
     b_dag_starts = [rand_steps + (i + 1) * dag_every for i in range(dag_n)]
     # clip to actual data length
     b_dag_starts = [x for x in b_dag_starts if x < total_x]
@@ -355,7 +382,7 @@ def draw_phase_comparison(fig, d, hp):
         (0,          b_rand_end,  "#ffecec", "Random\n(no filter)"),
         (b_rand_end, b_bc_start,  "#fff8e8", "MPC + filter\n(no NN)"),
         (b_bc_start, b_dag_starts[0] if b_dag_starts else total_x,
-                                  "#eaf4ff", "BC supervised"),
+         "#eaf4ff", "BC supervised"),
     ]
     dag_colours = ["#edfff0", "#d6f5da", "#b8ecc0", "#9de3a8", "#7dd990"]
     for i, bx in enumerate(b_dag_starts):
@@ -376,7 +403,7 @@ def draw_phase_comparison(fig, d, hp):
         mid = (x0 + x1) / 2
         ax_top.text(mid, ax_top.get_ylim()[1] if len(cy_rand) == 0 else
                     max(cy_rand.max() if len(cy_rand) > 0 else 0,
-                        cy_tr.max()   if len(cy_tr)   > 0 else 0) * 1.05,
+                        cy_tr.max() if len(cy_tr) > 0 else 0) * 1.05,
                     label, ha="center", va="top", fontsize=7,
                     color="#444", style="italic", clip_on=True)
 
@@ -386,10 +413,11 @@ def draw_phase_comparison(fig, d, hp):
 
     # random phase: line + fill violations
     if len(cx_rand) > 0:
-        ax_top.plot(cx_rand, cy_rand, color=C_DANGER, lw=0.7, alpha=0.8, zorder=3)
+        ax_top.plot(cx_rand, cy_rand, color=C_DANGER,
+                    lw=0.7, alpha=0.8, zorder=3)
         ax_top.fill_between(cx_rand, cy_rand, 0, where=(cy_rand < 0),
                             color=C_DANGER, alpha=0.45, zorder=4,
-                            label=f"Violation ({int((cy_rand<0).sum())} steps)")
+                            label=f"Violation ({int((cy_rand < 0).sum())} steps)")
         # red scatter dots at violation points
         vmask = cy_rand < 0
         ax_top.scatter(cx_rand[vmask], np.zeros(vmask.sum()),
@@ -406,28 +434,29 @@ def draw_phase_comparison(fig, d, hp):
     if len(cx_filt) > 0:
         ds_filt, _ = downsample(cx_filt, cx_filt, n=4000)
         y_top = (max(cy_rand.max() if len(cy_rand) > 0 else 0,
-                     cy_tr.max()   if len(cy_tr)   > 0 else 0)) * 0.97
+                     cy_tr.max() if len(cy_tr) > 0 else 0)) * 0.97
         ax_top.plot(ds_filt, np.full_like(ds_filt, y_top),
                     "|", color=C_FILTER, alpha=0.2, ms=4, zorder=3,
                     label="Filter correction")
 
     # DAgger iteration vertical lines
     for i, bx in enumerate(b_dag_starts):
-        ax_top.axvline(bx, color="#2c7a4b", lw=1.5, ls=":", alpha=0.9, zorder=5)
+        ax_top.axvline(bx, color="#2c7a4b", lw=1.5,
+                       ls=":", alpha=0.9, zorder=5)
         ax_top.text(bx + total_x * 0.004, ax_top.get_ylim()[0] if False else -15,
                     f"DAgger {i+1}", fontsize=7, color="#2c7a4b",
                     rotation=90, va="bottom")
 
     # dynamics model training markers (every dyn_every within training phase)
     dyn_x = [rand_steps + k * dyn_every
-              for k in range(1, int(total_x / dyn_every) + 1)
-              if rand_steps + k * dyn_every < total_x]
+             for k in range(1, int(total_x / dyn_every) + 1)
+             if rand_steps + k * dyn_every < total_x]
     for dx in dyn_x:
-        ax_top.axvline(dx, color="#95a5a6", lw=0.8, ls="--", alpha=0.4, zorder=2)
+        ax_top.axvline(dx, color="#95a5a6", lw=0.8,
+                       ls="--", alpha=0.4, zorder=2)
 
     # phase boundary heavy line
-    ax_top.axvline(b_rand_end, color="#555", lw=2, alpha=0.7, zorder=6,
-                   label="Filter ON")
+    # ax_top.axvline(b_rand_end, color="#555", lw=2, alpha=0.7, zorder=6,               label="Filter ON")
     ax_top.axvline(b_bc_start, color="#2980b9", lw=1.5, ls="-.", alpha=0.7, zorder=6,
                    label="NN training starts")
 
@@ -461,7 +490,8 @@ def draw_phase_comparison(fig, d, hp):
         ax_bot.axvspan(x0, x1, color=bg, alpha=1.0, zorder=0)
     ax_bot.axvline(b_rand_end, color="#555", lw=2, alpha=0.5, zorder=6)
     for bx in b_dag_starts:
-        ax_bot.axvline(bx, color="#2c7a4b", lw=1.2, ls=":", alpha=0.7, zorder=5)
+        ax_bot.axvline(bx, color="#2c7a4b", lw=1.2,
+                       ls=":", alpha=0.7, zorder=5)
 
     ax_bot.set_xlabel("Combined training step  (random phase → MPC + filter → DAgger)",
                       fontsize=9)
@@ -473,7 +503,7 @@ def draw_phase_comparison(fig, d, hp):
     ax_bot.legend(l1 + l2, lb1 + lb2, fontsize=7, loc="upper right")
 
     # ── x-axis tick labels: show actual phase names ───────────────────────────
-    tick_xs  = [0, b_rand_end, b_bc_start] + b_dag_starts
+    tick_xs = [0, b_rand_end, b_bc_start] + b_dag_starts
     tick_lbs = (
         ["0",
          f"{b_rand_end}\n(filter ON)",
@@ -485,8 +515,10 @@ def draw_phase_comparison(fig, d, hp):
 
 
 def draw_filter_du(ax, d):
-    sf_steps4 = d["sf_steps4"]; sf_du = d["sf_du"]
-    sf_steps5 = d["sf_steps5"]; sf_V  = d["sf_V"]
+    sf_steps4 = d["sf_steps4"]
+    sf_du = d["sf_du"]
+    sf_steps5 = d["sf_steps5"]
+    sf_V = d["sf_V"]
 
     if len(sf_steps4) > 0:
         ds_s, ds_du = downsample(sf_steps4, sf_du)
@@ -497,7 +529,8 @@ def draw_filter_du(ax, d):
     if len(sf_steps5) > 0:
         ds_s5, ds_V = downsample(sf_steps5, sf_V)
         ax2.plot(ds_s5, ds_V, color=C_CLF, lw=0.7, alpha=0.5)
-        ax2.plot(ds_s5, smooth(ds_V, 100), color=C_CLF, lw=1.5, label="V(x)  (CLF value)")
+        ax2.plot(ds_s5, smooth(ds_V, 100), color=C_CLF,
+                 lw=1.5, label="V(x)  (CLF value)")
     ax2.set_ylabel("V(x)", fontsize=8, color=C_CLF)
     ax2.tick_params(axis="y", labelcolor=C_CLF, labelsize=7)
     ax2.spines["top"].set_visible(False)
@@ -523,31 +556,35 @@ def plot_overview(d, run_name, footer):
 
     # Row 0 — safety timeline (broken x-axis)
     n_rand = max(len(d["rand_steps"]), 1)
-    n_tr   = max(len(d["tr_steps"]),   1)
+    n_tr = max(len(d["tr_steps"]),   1)
     top_gs = gridspec.GridSpecFromSubplotSpec(
         1, 2, subplot_spec=outer[0],
         width_ratios=[n_rand, n_tr], wspace=0.05)
-    ax_rand  = fig.add_subplot(top_gs[0])
+    ax_rand = fig.add_subplot(top_gs[0])
     ax_train = fig.add_subplot(top_gs[1], sharey=ax_rand)
     draw_safety_timeline(ax_rand, ax_train, d)
 
     # Row 1 — episode stats | CBF barrier
-    mid_gs = gridspec.GridSpecFromSubplotSpec(1, 2, subplot_spec=outer[1], wspace=0.35)
+    mid_gs = gridspec.GridSpecFromSubplotSpec(
+        1, 2, subplot_spec=outer[1], wspace=0.35)
     draw_episode_stats(fig.add_subplot(mid_gs[0]), d)
     draw_cbf_barrier(fig.add_subplot(mid_gs[1]), d)
 
     # Row 2 — policy losses | rewards
-    bot_gs = gridspec.GridSpecFromSubplotSpec(1, 2, subplot_spec=outer[2], wspace=0.35)
+    bot_gs = gridspec.GridSpecFromSubplotSpec(
+        1, 2, subplot_spec=outer[2], wspace=0.35)
     draw_policy_losses(fig.add_subplot(bot_gs[0]), d)
     draw_rewards(fig.add_subplot(bot_gs[1]), d)
 
     # Row 3 — DAgger curriculum | filter correction + val loss
-    dag_gs = gridspec.GridSpecFromSubplotSpec(1, 3, subplot_spec=outer[3], wspace=0.38)
+    dag_gs = gridspec.GridSpecFromSubplotSpec(
+        1, 3, subplot_spec=outer[3], wspace=0.38)
     draw_dagger_curriculum(fig.add_subplot(dag_gs[0]), d)
     draw_filter_du(fig.add_subplot(dag_gs[1]), d)
     draw_dynamics_val(fig.add_subplot(dag_gs[2]), d)
 
-    fig.text(0.5, 0.002, footer, ha="center", va="bottom", fontsize=9, color="grey")
+    fig.text(0.5, 0.002, footer, ha="center",
+             va="bottom", fontsize=9, color="grey")
     return fig
 
 
@@ -631,50 +668,59 @@ def load_hparams(run_dir):
 def load_all(ea, T):
     d = {}
 
-    d["rand_steps"],  d["rand_margin"]  = load(ea, f"random_phase/{T}/theta_margin_deg")
-    d["rand_att_s"],  d["rand_att"]     = load(ea, f"random_phase/{T}/attitude_error_deg")
+    d["rand_steps"],  d["rand_margin"] = load(
+        ea, f"random_phase/{T}/theta_margin_deg")
+    d["rand_att_s"],  d["rand_att"] = load(
+        ea, f"random_phase/{T}/attitude_error_deg")
 
-    d["tr_steps"],  d["tr_margin"]      = load(ea, f"train_env/{T}/theta_margin_deg")
-    d["tr_ep_s"],   d["tr_ep_margin"]   = load(ea, f"train_env/{T}/min_theta_margin_deg")
-    d["tr_ep_filt_s"], d["tr_ep_filt"]  = load(ea, f"train_env/{T}/filter_activations")
-    d["tr_ep_ff_s"],   d["tr_ep_ff"]    = load(ea, f"train_env/{T}/filter_fraction")
-    d["tr_ep_koz_s"],  d["tr_ep_koz"]   = load(ea, f"train_env/{T}/koz_violations")
-    d["tr_ep_rew_s"],  d["tr_ep_rew"]   = load(ea, f"train_env/{T}/reward")
-    d["tr_ep_att_s"],  d["tr_ep_att"]   = load(ea, f"train_env/{T}/att_err_final_deg")
+    d["tr_steps"],  d["tr_margin"] = load(
+        ea, f"train_env/{T}/theta_margin_deg")
+    d["tr_ep_s"],   d["tr_ep_margin"] = load(
+        ea, f"train_env/{T}/min_theta_margin_deg")
+    d["tr_ep_filt_s"], d["tr_ep_filt"] = load(
+        ea, f"train_env/{T}/filter_activations")
+    d["tr_ep_ff_s"],   d["tr_ep_ff"] = load(
+        ea, f"train_env/{T}/filter_fraction")
+    d["tr_ep_koz_s"],  d["tr_ep_koz"] = load(
+        ea, f"train_env/{T}/koz_violations")
+    d["tr_ep_rew_s"],  d["tr_ep_rew"] = load(ea, f"train_env/{T}/reward")
+    d["tr_ep_att_s"],  d["tr_ep_att"] = load(
+        ea, f"train_env/{T}/att_err_final_deg")
 
-    _, ep_lens                          = load(ea, f"train_env/{T}/episode_length")
+    _, ep_lens = load(ea, f"train_env/{T}/episode_length")
     d["ep_lens"] = ep_lens
 
-    d["sf_steps"],  d["sf_H"]           = load(ea, f"safety/{T}/cbf_H")
-    d["sf_steps2"], d["sf_slack"]       = load(ea, f"safety/{T}/cbf_slack")
-    d["sf_steps3"], d["sf_active"]      = load(ea, f"safety/{T}/filter_active")
-    d["sf_steps4"], d["sf_du"]          = load(ea, f"safety/{T}/filter_du_norm")
-    d["sf_steps5"], d["sf_V"]           = load(ea, f"safety/{T}/clf_V")
+    d["sf_steps"],  d["sf_H"] = load(ea, f"safety/{T}/cbf_H")
+    d["sf_steps2"], d["sf_slack"] = load(ea, f"safety/{T}/cbf_slack")
+    d["sf_steps3"], d["sf_active"] = load(ea, f"safety/{T}/filter_active")
+    d["sf_steps4"], d["sf_du"] = load(ea, f"safety/{T}/filter_du_norm")
+    d["sf_steps5"], d["sf_V"] = load(ea, f"safety/{T}/clf_V")
 
-    d["pol_s"],   d["pol_imit"]         = load(ea, "policy/loss_imit")
-    d["pol_s2"],  d["pol_cbf"]          = load(ea, "policy/loss_cbf")
-    d["pol_s3"],  d["pol_clf"]          = load(ea, "policy/loss_clf")
-    d["pol_s4"],  d["pol_cbf_vf"]       = load(ea, "policy/cbf_viol_frac")
-    d["pol_s5"],  d["pol_cbf_mm"]       = load(ea, "policy/cbf_mean_margin")
-    d["pol_s6"],  d["pol_clf_vf"]       = load(ea, "policy/clf_viol_frac")
+    d["pol_s"],   d["pol_imit"] = load(ea, "policy/loss_imit")
+    d["pol_s2"],  d["pol_cbf"] = load(ea, "policy/loss_cbf")
+    d["pol_s3"],  d["pol_clf"] = load(ea, "policy/loss_clf")
+    d["pol_s4"],  d["pol_cbf_vf"] = load(ea, "policy/cbf_viol_frac")
+    d["pol_s5"],  d["pol_cbf_mm"] = load(ea, "policy/cbf_mean_margin")
+    d["pol_s6"],  d["pol_clf_vf"] = load(ea, "policy/clf_viol_frac")
     d["pol_dag_s"],      d["pol_kappa"] = load(ea, "policy/kappa")
-    d["pol_dag_lcbf_s"], d["pol_lcbf"]  = load(ea, "policy/lambda_cbf")
-    d["pol_dag_lclf_s"], d["pol_lclf"]  = load(ea, "policy/lambda_clf")
+    d["pol_dag_lcbf_s"], d["pol_lcbf"] = load(ea, "policy/lambda_cbf")
+    d["pol_dag_lclf_s"], d["pol_lclf"] = load(ea, "policy/lambda_clf")
 
-    d["ev_rew_s"],  d["ev_rew"]         = load(ea, f"eval_env/{T}/reward")
-    d["pev_rew_s"], d["pev_rew"]        = load(ea, f"policy_eval/{T}/reward")
-    d["pev_koz_s"], d["pev_koz"]        = load(ea, f"policy_eval/{T}/koz_violations")
-    d["ev_koz_s"],  d["ev_koz"]         = load(ea, f"eval_env/{T}/koz_violations")
-    d["ev_att_s"],  d["ev_att"]         = load(ea, f"eval_env/{T}/att_err_final_deg")
+    d["ev_rew_s"],  d["ev_rew"] = load(ea, f"eval_env/{T}/reward")
+    d["pev_rew_s"], d["pev_rew"] = load(ea, f"policy_eval/{T}/reward")
+    d["pev_koz_s"], d["pev_koz"] = load(ea, f"policy_eval/{T}/koz_violations")
+    d["ev_koz_s"],  d["ev_koz"] = load(ea, f"eval_env/{T}/koz_violations")
+    d["ev_att_s"],  d["ev_att"] = load(ea, f"eval_env/{T}/att_err_final_deg")
 
-    d["val_s"],  d["val_loss"]          = load(ea, f"val/{T}/loss")
+    d["val_s"],  d["val_loss"] = load(ea, f"val/{T}/loss")
 
     return d
 
 
 def build_footer(d):
-    n_rand  = int((d["rand_margin"] < 0).sum()) if len(d["rand_margin"]) > 0 else "?"
-    n_train = int(d["tr_ep_koz"].sum())          if len(d["tr_ep_koz"])   > 0 else "?"
+    n_rand = int((d["rand_margin"] < 0).sum()) if len(
+        d["rand_margin"]) > 0 else "?"
+    n_train = int(d["tr_ep_koz"].sum()) if len(d["tr_ep_koz"]) > 0 else "?"
     if len(d["tr_ep_ff"]) > 0:
         mf = f"{d['tr_ep_ff'].mean()*100:.1f}%"
     elif len(d["tr_ep_filt"]) > 0 and len(d["ep_lens"]) > 0:
@@ -692,12 +738,13 @@ def build_footer(d):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("run_dir")
-    ap.add_argument("--save",  action="store_true", help="save overview + per-chart PNGs")
+    ap.add_argument("--save",  action="store_true",
+                    help="save overview + per-chart PNGs")
     ap.add_argument("--task",  type=int, default=0)
     ap.add_argument("--dpi",   type=int, default=150)
     args = ap.parse_args()
 
-    run_dir  = args.run_dir.rstrip("/")
+    run_dir = args.run_dir.rstrip("/")
     run_name = os.path.basename(run_dir)
 
     pattern = os.path.join(run_dir, "events.out.tfevents.*")
@@ -711,7 +758,7 @@ def main():
     ea.Reload()
 
     T = f"task_{args.task}"
-    d  = load_all(ea, T)
+    d = load_all(ea, T)
     hp = load_hparams(run_dir)
     footer = build_footer(d)
 

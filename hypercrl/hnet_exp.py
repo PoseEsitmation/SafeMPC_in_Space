@@ -580,11 +580,20 @@ def run(hparams):
                     and policy_trainer._dagger_iter < getattr(hparams, "dagger_n_iter", 5)):
                 nn_agent.cache_state_norm(task_id)
 
+                # Capture norms for the closure — populated by cache_state_norm above.
+                _x_mu  = nn_agent.x_mu   # (1, proc_dim) on device, or None
+                _x_std = nn_agent.x_std
+                _a_mu  = nn_agent.a_mu.cpu().numpy().flatten() if nn_agent.a_mu is not None else None
+                _a_std = nn_agent.a_std.cpu().numpy().flatten() if nn_agent.a_std is not None else None
+
                 def _preprocess_for_dagger(raw_obs):
                     import torch as _torch
                     x = _torch.tensor(raw_obs, dtype=_torch.float32,
                                       device=hparams.device).unsqueeze(0)
-                    return _preprocess_state_torch(x, hparams.env)
+                    x = _preprocess_state_torch(x, hparams.env)
+                    if nn_agent.normalize_xu and _x_mu is not None:
+                        x = (x - _x_mu) / _x_std
+                    return x
 
                 policy_trainer.dagger_update(
                     env=env,
@@ -595,6 +604,8 @@ def run(hparams):
                     n_rollout=getattr(hparams, "dagger_n_rollout", 5),
                     max_ep_steps=1000,
                     writer=logger.writer,
+                    a_mu=_a_mu,
+                    a_std=_a_std,
                 )
 
         augment_model_after(task_id, mnet, hnet, hparams, collector)
