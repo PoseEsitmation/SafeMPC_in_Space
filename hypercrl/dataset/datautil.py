@@ -114,7 +114,7 @@ class DataCollector():
                 x_tt = x_tt - x_t
             x_t = np.vstack((x_t[0:1, :], np.cos(
                 x_t[1:2, :]), np.sin(x_t[1:2, :]), x_t[2:, :]))
-        elif self.env_name in ["half_cheetah_body", "hopper"]:
+        elif self.env_name in ["half_cheetah_body", "half_cheetah_safe", "hopper"]:
             if self.next_mode == "diff":
                 x_tt = np.vstack((x_tt[0:1, :], x_tt[1:, :] - x_t[1:, :]))
             x_t = np.vstack((x_t[1:2, :], np.cos(

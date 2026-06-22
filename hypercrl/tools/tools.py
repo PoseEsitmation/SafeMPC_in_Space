@@ -142,9 +142,11 @@ class MonitorBase():
             self.tflog_dir = find_run_dir(hparams)
         else:
             timestamp = time.strftime('%Y%m%d_%H%M%S')
+            run_name = getattr(hparams, 'run_name', '')
+            name_suffix = f'_{run_name}' if run_name else ''
             self.tflog_dir = os.path.join(
                 hparams.save_folder,
-                f'{timestamp}_TB{hparams.env}_{hparams.model}_{hparams.seed}')
+                f'{timestamp}_TB{hparams.env}_{hparams.model}_{hparams.seed}{name_suffix}')
         self.model_dir = os.path.join(self.tflog_dir, 'model')
         os.makedirs(hparams.save_folder, exist_ok=True)
         os.makedirs(self.tflog_dir, exist_ok=True)
@@ -340,7 +342,10 @@ class MonitorRL(MonitorBase):
         self.rl_stats = [{"step": [], "reward": [], "time": [],
                           "diff": []} for _ in range(self.num_envs)]
         self.rewards = []
-        self.koz_violations = 0  # KOZ violation counter, reset each episode
+        self.koz_violations = 0       # KOZ violation counter, reset each episode
+        self._filter_activations = 0  # steps safety filter was active this episode
+        self._min_theta_margin_deg = float('inf')  # worst margin this episode
+        self._att_err_final_deg = float('nan')     # attitude error at last step
 
         self.eval_envs = CLEnvHandler(hparams.env, hparams.seed)
         for task_id in range(hparams.num_tasks):
@@ -366,15 +371,40 @@ class MonitorRL(MonitorBase):
         # physical margin in degrees so the plot is interpretable and consistent
         # with koz_violations: >0 = boresight outside KOZ (safe), <0 = inside (violation).
         if self.hparams.env.startswith("spaceEnv") and state is not None:
+            _SCALE_OMEGA = 5.0
             theta_margin_deg = np.degrees((state[7] + 1.0) * (3 * np.pi / 4) - np.pi / 2)
+            theta_deg        = (state[8] + 1.0) * 90.0   # (obs+1)*π/2 in degrees
+            att_err_deg      = 2 * np.degrees(np.arccos(np.clip(np.abs(state[0]), 0.0, 1.0)))
+            omega_norm_degs  = np.degrees(np.linalg.norm(state[4:7]) * _SCALE_OMEGA)
+
             self.writer.add_scalar(
                 f'train_env/task_{task_id}/theta_margin_deg', theta_margin_deg, self.env_iter)
-            att_err_deg = 2 * np.degrees(np.arccos(np.clip(np.abs(state[0]), 0.0, 1.0)))
+            self.writer.add_scalar(
+                f'train_env/task_{task_id}/theta_deg', theta_deg, self.env_iter)
             self.writer.add_scalar(
                 f'train_env/task_{task_id}/attitude_error_deg', att_err_deg, self.env_iter)
-            if theta_margin_deg < 0:  # equivalent to normalised state[7] < -1/3
-                self.koz_violations+=1
-            
+            self.writer.add_scalar(
+                f'train_env/task_{task_id}/omega_norm_degs', omega_norm_degs, self.env_iter)
+
+            if theta_margin_deg < 0:
+                self.koz_violations += 1
+            self._min_theta_margin_deg = min(self._min_theta_margin_deg, theta_margin_deg)
+            self._att_err_final_deg    = att_err_deg
+
+        # Track filter activation count per episode
+        sf = getattr(getattr(self, 'agent', None), 'safety_filter', None)
+        if sf is not None and sf.last_was_active:
+            self._filter_activations += 1
+
+        if self.hparams.env == "half_cheetah_safe" and info is not None:
+            if info.get('keep_out_violation'):
+                self.koz_violations += 1
+                print(
+                    f"[KOZ] Task {task_id}, step {self.env_iter}: "
+                    f"cheetah entered keep-out zone at x={info.get('violated_at', float('nan')):.2f}"
+                )
+            elif info.get('flipped'):
+                print(f"[FLIP] Task {task_id}, step {self.env_iter}: cheetah flipped over")
 
         if done:
             eprew = sum(self.rewards)
@@ -384,6 +414,23 @@ class MonitorRL(MonitorBase):
             self.writer.add_scalar(
                 f'train_env/task_{task_id}/episode_length', eplen, self.env_iter)
             if self.hparams.env.startswith("spaceEnv"):
+                self.writer.add_scalar(
+                    f'train_env/task_{task_id}/koz_violations',       self.koz_violations,            self.env_iter)
+                self.writer.add_scalar(
+                    f'train_env/task_{task_id}/min_theta_margin_deg', self._min_theta_margin_deg,     self.env_iter)
+                self.writer.add_scalar(
+                    f'train_env/task_{task_id}/filter_activations',   self._filter_activations,       self.env_iter)
+                self.writer.add_scalar(
+                    f'train_env/task_{task_id}/filter_fraction',
+                    self._filter_activations / max(eplen, 1),                                         self.env_iter)
+                if not np.isnan(self._att_err_final_deg):
+                    self.writer.add_scalar(
+                        f'train_env/task_{task_id}/att_err_final_deg', self._att_err_final_deg,       self.env_iter)
+                self.koz_violations         = 0
+                self._min_theta_margin_deg  = float('inf')
+                self._filter_activations    = 0
+                self._att_err_final_deg     = float('nan')
+            elif self.hparams.env == "half_cheetah_safe":
                 self.writer.add_scalar(
                     f'train_env/task_{task_id}/koz_violations', self.koz_violations, self.env_iter)
                 self.koz_violations = 0
@@ -433,8 +480,9 @@ class MonitorRL(MonitorBase):
         torch.save(save_dict, latest_pt)
         print(f"[checkpoint] step {self.env_iter} → {latest_pt}")
 
-    def _log_safety(self, info: dict, task_id: int) -> None:
+    def _log_safety(self, info: dict, task_id: int, global_step: int = None) -> None:
         """Log CBF, CLF, and keep-out zone metrics to TensorBoard every step."""
+        step = self.env_iter if global_step is None else global_step
         prefix = f'safety/task_{task_id}'
 
         # Keep-out zone data (always present when env is HalfCheetahSafeEnv)
@@ -442,13 +490,19 @@ class MonitorRL(MonitorBase):
             self.writer.add_scalar(
                 f'{prefix}/keepout_violation',
                 float(info['keep_out_violation']),
-                self.env_iter,
+                step,
             )
         if 'min_zone_dist' in info:
             self.writer.add_scalar(
                 f'{prefix}/min_zone_dist',
                 float(info['min_zone_dist']),
-                self.env_iter,
+                step,
+            )
+        if 'flipped' in info:
+            self.writer.add_scalar(
+                f'{prefix}/flipped',
+                float(info['flipped']),
+                step,
             )
 
         # CBF / CLF values from the safety filter (SafeAgent only)
@@ -456,14 +510,12 @@ class MonitorRL(MonitorBase):
         if sf is not None:
             import math
             if not math.isnan(sf.last_H):
-                self.writer.add_scalar(f'{prefix}/cbf_H', sf.last_H, self.env_iter)
+                self.writer.add_scalar(f'{prefix}/cbf_H',        sf.last_H,            step)
             if not math.isnan(sf.last_V):
-                self.writer.add_scalar(f'{prefix}/clf_V', sf.last_V, self.env_iter)
-            self.writer.add_scalar(
-                f'{prefix}/filter_active',
-                float(sf.last_was_active),
-                self.env_iter,
-            )
+                self.writer.add_scalar(f'{prefix}/clf_V',        sf.last_V,            step)
+            self.writer.add_scalar(f'{prefix}/filter_active',    float(sf.last_was_active), step)
+            self.writer.add_scalar(f'{prefix}/cbf_slack',        sf.last_cbf_slack,    step)
+            self.writer.add_scalar(f'{prefix}/filter_du_norm',   sf.last_du_norm,      step)
 
     def log_xu_norm(self, task_id):
         if self.hparams.normalize_xu == False:
@@ -565,15 +617,26 @@ class MonitorRL(MonitorBase):
 
             rewards = []
             xs, us = [], []
-            koz_violations = 0
+            koz_violations       = 0
+            min_theta_margin_deg = float('inf')
+            att_err_final_deg    = float('nan')
+
             while (not done):
-                # env.render()
                 u_t = agent.act(x_t, task_id=tid).cpu().numpy()
                 x_tt, reward, terminated, truncated, info = env.step(
                     u_t.reshape(env.action_space.shape))
                 done = terminated or truncated
-                if self.hparams.env.startswith("spaceEnv") and x_tt[7] < -1/3:
+
+                if self.hparams.env.startswith("spaceEnv"):
+                    tm_deg = np.degrees((x_tt[7] + 1.0) * (3 * np.pi / 4) - np.pi / 2)
+                    if tm_deg < 0:
+                        koz_violations += 1
+                    min_theta_margin_deg = min(min_theta_margin_deg, tm_deg)
+                    att_err_final_deg = 2 * np.degrees(
+                        np.arccos(np.clip(np.abs(x_tt[0]), 0.0, 1.0)))
+                if self.hparams.env == "half_cheetah_safe" and info.get('keep_out_violation'):
                     koz_violations += 1
+
                 xs.append(x_t)
                 us.append(u_t)
                 x_t = x_tt
@@ -583,7 +646,7 @@ class MonitorRL(MonitorBase):
             if self.hparams.env == "metaworld10":
                 print(f"Task {env.active_task}, Success {info['success']}")
             tdone = time.time() - ts
-            return eprew, xs, us, tdone, koz_violations
+            return eprew, xs, us, tdone, koz_violations, min_theta_margin_deg, att_err_final_deg
 
         for tid in range(1 + task_id):
             env = self.eval_envs.get_env(tid)
@@ -601,7 +664,7 @@ class MonitorRL(MonitorBase):
             # Run one evaluation episode using learned policy
             stats = [run_one_eps(env, self.agent, tid)
                      for _ in range(self.run_eval_env_eps)]
-            eprews, xs, us, times, koz_viol_list = zip(*stats)
+            eprews, xs, us, times, koz_viol_list, min_margins, att_errs = zip(*stats)
             eprew = np.mean(eprews)
             mean_time = np.mean(times)
 
@@ -653,9 +716,18 @@ class MonitorRL(MonitorBase):
             self.writer.add_scalar(f'eval_env/task_{tid}/reward', eprew, self.env_iter)
             self.writer.add_scalar(f'eval_env/task_{tid}/prediction_error', l1_pred_diff, self.env_iter)
             self.writer.add_scalar(f'eval_env/task_{tid}/episode_time', mean_time, self.env_iter)
-            if self.hparams.env.startswith("spaceEnv"):
+            if self.hparams.env.startswith("spaceEnv") or self.hparams.env == "half_cheetah_safe":
                 self.writer.add_scalar(
                     f'eval_env/task_{tid}/koz_violations', np.mean(koz_viol_list), self.env_iter)
+            if self.hparams.env.startswith("spaceEnv"):
+                valid_margins = [m for m in min_margins if m < float('inf')]
+                if valid_margins:
+                    self.writer.add_scalar(
+                        f'eval_env/task_{tid}/min_theta_margin_deg', np.mean(valid_margins), self.env_iter)
+                valid_errs = [e for e in att_errs if not np.isnan(e)]
+                if valid_errs:
+                    self.writer.add_scalar(
+                        f'eval_env/task_{tid}/att_err_final_deg', np.mean(valid_errs), self.env_iter)
 
             print(f"Task: {tid}, Step: {self.env_iter} Eval reward: {eprew:.3f}, " +
                   f"On-policy Diff: {l1_pred_diff:.5f}, Time Taken {mean_time:.1f}s")

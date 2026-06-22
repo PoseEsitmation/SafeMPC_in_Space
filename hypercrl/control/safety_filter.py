@@ -85,6 +85,7 @@ class SafetyFilter:
         control_dim: int = 3,
         cbf_epsilon: float = 0.0,
         clf_rho: float = 1e3,
+        cbf_rho: float = 1e6,
     ) -> None:
         self.cbf = cbf
         self.clf = clf
@@ -92,14 +93,21 @@ class SafetyFilter:
         self.control_dim = control_dim
         self.cbf_epsilon = cbf_epsilon
         self.clf_rho = clf_rho
+        self.cbf_rho = cbf_rho   # penalty for CBF slack — high = near-hard constraint
 
         # Populated after every filter() call; read by the monitor for TensorBoard.
         self.last_H: float = float("nan")
         self.last_V: float = float("nan")
         self.last_was_active: bool = False
+        self.last_cbf_slack: float = 0.0
+        self.last_du_norm: float = 0.0   # ‖u_safe − u_proposed‖ — correction magnitude
 
     def filter(self, state: np.ndarray, u_proposed: np.ndarray) -> np.ndarray:
         """Return the safe action closest (in L2) to u_proposed.
+
+        Both CBF and CLF constraints use slack variables so the QP is always
+        feasible.  CBF slack is penalised at ``cbf_rho`` (default 1e6, near-hard);
+        CLF slack at ``clf_rho`` (default 1e3, soft — stability is secondary).
 
         Parameters
         ----------
@@ -112,35 +120,42 @@ class SafetyFilter:
         -------
         np.ndarray
             Safe action, shape ``(control_dim,)``.  Falls back to
-            ``u_proposed`` if the QP cannot be solved.
+            ``u_proposed`` if the QP cannot be solved even with slacks.
         """
         u_ref = u_proposed.flatten()[: self.control_dim]
-        u = cp.Variable(self.control_dim)
+        u         = cp.Variable(self.control_dim)
+        delta_cbf = cp.Variable(nonneg=True)   # CBF slack — penalised heavily
+
+        objective_terms = [cp.sum_squares(u - u_ref),
+                           self.cbf_rho * cp.square(delta_cbf)]
 
         constraints: list = [
             u >= -self.u_max,
             u <= self.u_max,
-            self.cbf.H_dot_expr(state, u) >= self.cbf_epsilon,
+            # CBF: soft with high penalty so QP is always feasible
+            self.cbf.H_dot_expr(state, u) + delta_cbf >= self.cbf_epsilon,
         ]
 
         if self.clf is not None:
-            delta = cp.Variable(nonneg=True)
-            constraints.append(self.clf.V_dot_expr(state, u) <= delta)
-            objective = cp.Minimize(
-                cp.sum_squares(u - u_ref) + self.clf_rho * cp.square(delta)
-            )
-        else:
-            objective = cp.Minimize(cp.sum_squares(u - u_ref))
+            delta_clf = cp.Variable(nonneg=True)
+            constraints.append(self.clf.V_dot_expr(state, u) <= delta_clf)
+            objective_terms.append(self.clf_rho * cp.square(delta_clf))
 
         self.last_H = float(self.cbf.H(state))
         self.last_V = float(self.clf.V(state)) if self.clf is not None else float("nan")
 
-        prob = cp.Problem(objective, constraints)
+        prob = cp.Problem(cp.Minimize(sum(objective_terms)), constraints)
         try:
-            prob.solve(solver=cp.OSQP, warm_start=True)
+            # CLARABEL handles large coefficient ratios (cbf_rho=1e6 vs O(1) terms)
+            # much better than OSQP's ADMM which hits user_limit on ill-conditioned problems.
+            prob.solve(solver=cp.CLARABEL)
             if prob.status in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE) and u.value is not None:
                 u_safe = u.value.astype(np.float64)
-                self.last_was_active = float(np.linalg.norm(u_safe - u_ref)) > 1e-4
+                self.last_du_norm     = float(np.linalg.norm(u_safe - u_ref))
+                self.last_was_active  = self.last_du_norm > 1e-4
+                self.last_cbf_slack   = float(delta_cbf.value) if delta_cbf.value is not None else 0.0
+                if self.last_cbf_slack > 1e-4:
+                    logger.debug("SafetyFilter CBF slack=%.4f (H=%.4f)", self.last_cbf_slack, self.last_H)
                 return u_safe
         except Exception as exc:
             logger.warning("SafetyFilter QP exception: %s", exc)
@@ -150,4 +165,5 @@ class SafetyFilter:
             getattr(prob, "status", "unknown"),
         )
         self.last_was_active = False
+        self.last_cbf_slack  = float("nan")
         return u_proposed.copy()

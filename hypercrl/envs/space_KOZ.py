@@ -11,6 +11,8 @@ from numba import njit
 
 from .subfunctions_att_constraints import KeepOutZone
 from .subfunctions_att_constraints import generate_avoid_vector_in_i_for_1Fzone_phase1_v2
+from .space_cbf_clf import SpaceAttitudeCBF, SpaceAttitudeCLF
+from hypercrl.control.safety_filter import SafetyFilter
 
 deg2rad = np.pi / 180
 rad2deg = 180 / np.pi
@@ -311,7 +313,7 @@ class SatDynEnv(gym.Env):
         self.steps += 1
         done = self.steps >= self.max_steps
 
-        return self._normalise(), reward, done, False, {}
+        return self._normalise(), reward, done, False, {"keep_out_violation": bool(theta_margin < 0)}
 
 
     def render(self):
@@ -387,6 +389,37 @@ class SatDynEnv(gym.Env):
         self._sat_mesh.copy_from(sat)
         self._bore_mesh.copy_from(boresight_arrow)
         self._pl.update()
+
+    # ------------------------------------------------------------------
+    # Safety filter interface (paper Eq. 19)
+    # ------------------------------------------------------------------
+
+    def get_cbf(self, gamma: float = 0.5) -> SpaceAttitudeCBF:
+        return SpaceAttitudeCBF(self, gamma=gamma)
+
+    def get_clf(
+        self,
+        c_q: float = 1.0,
+        c_w: float = 0.1,
+        zeta_min: float = 0.001,
+        zeta_max: float = 0.06,
+    ) -> SpaceAttitudeCLF:
+        return SpaceAttitudeCLF(self, c_q=c_q, c_w=c_w, zeta_min=zeta_min, zeta_max=zeta_max)
+
+    def get_safety_filter(
+        self,
+        cbf_epsilon: float = 0.01,
+        clf_rho: float = 0.001,
+        gamma: float = 0.5,
+    ) -> SafetyFilter:
+        return SafetyFilter(
+            cbf=self.get_cbf(gamma=gamma),
+            clf=self.get_clf(),
+            u_max=1.0,           # action space is [-1,1]³
+            control_dim=3,
+            cbf_epsilon=cbf_epsilon,
+            clf_rho=clf_rho,
+        )
 
     def close(self):
         if hasattr(self, '_pl') and self._pl is not None:
