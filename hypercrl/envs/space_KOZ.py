@@ -197,7 +197,7 @@ class CBFCLFFilter:
 
     def __init__(self, inertia, dt, scale_torque,
                  alpha_cbf=1.0, gamma_clf=0.5,
-                 beta_cbf=10.0, beta_clf=10.0):
+                 beta_cbf=3.0, beta_clf=3.0):
         self.inertia_inv  = np.linalg.inv(inertia).astype(np.float64)
         self.dt           = dt
         self.scale_torque = scale_torque
@@ -351,7 +351,7 @@ class SatDynEnv(gym.Env):
              beta=10, alpha=66, scale_torque=2,
              time_per_episode=100, time_per_step=0.1, inertia=None,
              alpha_cbf=1.0, gamma_clf=0.5,
-             beta_cbf=10.0, beta_clf=10.0):
+             beta_cbf=3.0, beta_clf=3.0):
         super().__init__()
         self._angle_bound_lower = angle_bound_lower  # initial attitude error range [deg]
         self._angle_bound_upper = angle_bound_upper
@@ -536,6 +536,13 @@ class SatDynEnv(gym.Env):
         done = self.steps >= self.max_steps
 
         return self._normalise(), reward, done, False, {}
+        #
+        # return self._normalise(), reward, done, False, {
+        # "cbf_penalty"    : float(cbf_penalty),
+        # "clf_penalty"    : float(clf_penalty),
+        # "koz_violation"  : bool(theta_margin <= 0),
+        # "theta_margin_deg": float(self.state[7] * rad2deg),
+        # }
 
 
     def render(self):
