@@ -1,3 +1,41 @@
+# SafeMPC in Space
+
+Model-based continual learning for satellite attitude control with safety guarantees.
+
+The agent learns a dynamics model using **HyperCRL** (a hypernetwork that generates
+task-specific weights without forgetting previous tasks) and plans actions via **MPC**.
+A **CBF/CLF safety filter** intercepts every proposed action and solves a small QP to
+guarantee the satellite never enters the keep-out zone (KOZ), regardless of what the
+learned model predicts.
+
+## Repository layout
+
+```
+SafeMPC_in_Space/
+├── main.py                       # CLI entry point
+├── play.py                       # standalone checkpoint replayer
+├── hypercrl/
+│   ├── envs/space_KOZ.py         # satellite attitude env with KOZ
+│   ├── control/safety_filter.py  # CBF/CLF-QP filter
+│   ├── control/agent.py          # MPC agent
+│   ├── hypercl/                  # hypernetwork (hnet/mnet)
+│   └── model/                    # dynamics model training
+├── scripts/                      # analysis and batch-run helpers
+├── robosuite/                    # local fork of robosuite
+└── DOCS/                         # component and API definitions
+```
+
+## Installation
+
+**Prerequisites:** Python 3.12+, conda
+
+```bash
+conda create -n <your-env-name>
+conda activate <your-env-name>
+pip install -r requirements.txt
+```
+## Usage
+
 ### Basic Usage
 
 ```bash
@@ -36,16 +74,30 @@ python main.py run --method METHOD --env ENV
 
 | Environment         | Description                       |
 | ------------------- | --------------------------------- |
-| `cartpole`          | Cartpole balancing                                                                               |
-| `half_cheetah_body` | Half-cheetah with body variations                                                                |
-| `pusher`            | Pusher manipulation task                                                                         |
-| `door_pose`         | Door opening task                                                                                |
-| `spaceEnv`          | Satellite attitude control with KOZ — initial error 80°–180°, standard penalty (β=10, α=66)     |
-| `spaceEnv_easy`     | Same as `spaceEnv` but small initial error (10°–45°) — easier slew task                         |
-| `spaceEnv_hard`     | Large initial error (90°–180°) + 5× stronger KOZ penalty (β=50, α=100) — harder constraint task |
-| `spaceEnv_weak`     | Half thruster power (0.5 Nm) — simulates a low-torque spacecraft                                |
+| `cartpole`          | Cartpole balancing                |
+| `half_cheetah_body` | Half-cheetah with body variations |
+| `pusher`            | Pusher manipulation task          |
+| `door_pose`         | Door opening task                 |
+| `spaceEnv`          | Satellite attitude control with KOZ — 4 tasks varying difficulty and thruster strength |
+| `spaceEnv_moi`      | Satellite attitude control with KOZ — 4 tasks varying moment of inertia tensor        |
 
-> **Tip:** The space environment can be configured by these parameters via constructer arguments.
+**`spaceEnv` tasks:**
+
+| Task | Name | What varies |
+|------|------|-------------|
+| 0 | default | 80–180° initial error, full torque (2 Nm), standard KOZ penalty |
+| 1 | easy | 10–45° initial error |
+| 2 | hard | 90–180° initial error + 5× stronger KOZ penalty |
+| 3 | weak | Half thruster power (1 Nm) |
+
+**`spaceEnv_moi` tasks:**
+
+| Task | Description | Inertia `diag(Ixx, Iyy, Izz)` [kg·m²] |
+|------|-------------|----------------------------------------|
+| 0 | Asymmetric (baseline) | `(60, 50, 70)` |
+| 1 | Nearly symmetric, small satellite | `(20, 22, 25)` |
+| 2 | Heavy asymmetric, large satellite | `(120, 90, 150)` |
+| 3 | Oblate flat-disk shape | `(80, 80, 20)` |
 
 ### Examples
 
@@ -61,6 +113,19 @@ python main.py run --method hnet --env half_cheetah_body --device cuda:0 --seed 
 
 # Replay a trained checkpoint
 python main.py run --method ewc --env cartpole --play
+
+# Train HyperCRL on satellite attitude control with KOZ
+python main.py run --method hnet --env spaceEnv --device cpu --seed 42 --savepath ./runs/space
+
+# Replay trained checkpoint
+python main.py run --method hnet --env spaceEnv --seed 42 --savepath ./runs/space --play
+
+# --play finds the most recent run for the given env/method/seed combination.
+# To replay a specific run, pass its full timestamped path as --savepath:
+python main.py run --method hnet --env spaceEnv --savepath ./runs/space/20260617_143022_TBspaceEnv_hnet_42 --play
+
+# Alternatively, use the standalone replayer to point directly at a checkpoint:
+python play.py --savepath ./runs/space/20260617_143022_TBspaceEnv_hnet_42 --env spaceEnv
 ```
 
 ### TensorBoard
@@ -87,14 +152,21 @@ runs/my_experiment/
         └── model_1.pt
 ```
 
-`model.pt` is overwritten every `save_every` env steps (default 1000) so a crash never loses more than 1000 steps of progress. Per-task snapshots (`model_N.pt`) are written once at the end of each task and never overwritten.
 
-The timestamp prefix (`YYYYMMDD_HHMMSS`) ensures runs sort chronologically on disk and in the TensorBoard directory picker. Every run is kept independently — nothing is overwritten.
+| File | Behaviour |
+|------|-----------|
+| `model.pt` | Overwritten every `save_every` steps (default 1000) — crash-safe |
+| `model_N.pt` | Written once at end of task N, never overwritten |
+| Directory prefix | `YYYYMMDD_HHMMSS` — runs sort chronologically, nothing is overwritten |
+
 
 **Step 2 — Start TensorBoard** (Terminal 2):
 ```bash
 # Watch all runs at once (recommended):
 tensorboard --logdir /absolute/path/to/runs/my_experiment
+
+# Watch past runs (no current run needed)
+tensorboard --logdir=runs
 
 # Or watch a single specific run:
 tensorboard --logdir /absolute/path/to/runs/my_experiment/20260617_143022_TBcartpole_single_2020
@@ -136,3 +208,42 @@ Click **Scalars** to see training loss and reward curves. TensorBoard refreshes 
 > **Tip:** Always use `--savepath` with an absolute path in the `tensorboard --logdir` argument to avoid path confusion.
 
 > **Tip:** `--play` and resume automatically find the most recent run directory for the given `--env`, `--method`, and `--seed` combination inside `--savepath`. If you have multiple runs and want to replay a specific one, pass its full timestamped path as `--savepath`.
+
+## Safety filter
+
+Every MPC action passes through a QP-based safety filter before reaching the environment:
+
+```
+u_proposed (MPC) → SafetyFilter.filter() → u_safe → env.step()
+```
+
+The filter minimises deviation from `u_proposed` subject to:
+- **Hard constraint:** CBF barrier `H_dot ≥ ε` (KOZ never entered)
+- **Soft constraint:** CLF decay `V_dot ≤ δ` (stability, can be relaxed)
+- **Box constraint:** `u ∈ [−u_max, u_max]`
+
+On solver failure it falls back to `u_proposed` and logs a warning.
+The filter is geometry-agnostic — the env owns the CBF/CLF objects.
+
+
+## References
+
+This project builds on the following works:
+
+**Continual learning framework (HyperCRL):**
+> Y. Huang, K. Xie, H. Bharadhwaj, and F. Shkurti, "Continual Model-Based
+> Reinforcement Learning with Hypernetworks," *arXiv:2009.11997*, 2021.
+> [arxiv.org/abs/2009.11997](https://arxiv.org/abs/2009.11997)
+
+**Safety-guaranteed imitation learning from MPC (SafeMPC):**
+> A. Meinert, N. Baldauf, P. Stadler, and A. Turnwald, "Safety-Guaranteed
+> Imitation Learning from Nonlinear Model Predictive Control for Spacecraft
+> Close Proximity Operations," *arXiv:2603.18910*, 2026.
+> [arxiv.org/abs/2603.18910](https://arxiv.org/abs/2603.18910)
+
+**Space environment and safety filter:**
+> J. Yang and M. K. Ben-Larbi, "Safe Deep Reinforcement Learning for Spacecraft
+> Reorientation with Pointing Keep-Out Constraint," in *Proc. CEAS EuroGNC 2026*,
+> Madrid, Spain, May 2026, paper CEAS-GNC-2026-038.
+> arXiv: [arxiv.org/abs/2605.19967](https://doi.org/10.48550/arXiv.2605.19967) [eess.SY]
+

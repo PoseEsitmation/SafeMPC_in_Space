@@ -350,6 +350,109 @@ class SafeAgent(Agent):
         return torch.from_numpy(u_safe).to(u_proposed)
 
 
+def _preprocess_state_torch(x: torch.Tensor, env_name: str) -> torch.Tensor:
+    """Apply the same env-specific state transformation used in MPC._dynamics().
+
+    Input x must be shape (B, state_dim) with raw (un-preprocessed) observations.
+    Returns the preprocessed tensor of the same shape.
+    """
+    if env_name.startswith("inverted_pendulum") or env_name.startswith("cartpole"):
+        return torch.cat((x[:, 0:1], torch.cos(x[:, 1:2]), torch.sin(x[:, 1:2]), x[:, 2:]), dim=-1)
+    elif env_name in ["half_cheetah_body", "half_cheetah_safe", "hopper"]:
+        return torch.cat((x[:, 1:2], torch.cos(x[:, 2:3]), torch.sin(x[:, 2:3]), x[:, 3:]), dim=-1)
+    elif env_name == "door":
+        return torch.cat((x[:, 0:-1], torch.cos(x[:, -1:]), torch.sin(x[:, -1:])), dim=-1)
+    elif env_name == "door_pose":
+        return torch.cat((
+            x[:, 0:-2],
+            torch.cos(x[:, -2:-1]), torch.sin(x[:, -2:-1]),
+            torch.cos(x[:, -1:]), torch.sin(x[:, -1:]),
+        ), dim=-1)
+    return x
+
+
+class NNPolicyAgent(Agent):
+    """Neural-network policy agent: state → action, with optional safety filter.
+
+    Mirrors the preprocessing + normalisation pipeline of the MPC agent so that
+    the policy network sees the same input distribution it was trained on.
+
+    Usage (inference)::
+
+        nn_agent = NNPolicyAgent(hparams, policy_net, collector=collector,
+                                 safety_filter=env.get_safety_filter())
+        nn_agent.cache_state_norm(task_id)          # cache norms for this task
+        u = nn_agent.act(raw_obs, task_id=task_id)
+    """
+
+    def __init__(
+        self,
+        hparams,
+        policy,
+        collector=None,
+        safety_filter: Optional[SafetyFilterProtocol] = None,
+    ) -> None:
+        super().__init__(hparams)
+        self.device = hparams.device
+        self.policy = policy
+        self.collector = collector
+        self.safety_filter = safety_filter
+        self.normalize_xu: bool = hparams.normalize_xu if collector is not None else False
+
+        # Populated by cache_state_norm()
+        self.x_mu: Optional[torch.Tensor] = None
+        self.x_std: Optional[torch.Tensor] = None
+        self.a_mu: Optional[torch.Tensor] = None
+        self.a_std: Optional[torch.Tensor] = None
+
+    def set_safety_filter(self, safety_filter: Optional[SafetyFilterProtocol]) -> None:
+        self.safety_filter = safety_filter
+
+    def cache_state_norm(self, task_id: int) -> None:
+        if self.normalize_xu and self.collector is not None:
+            x_mu, x_std, a_mu, a_std = self.collector.norm(task_id)
+            self.x_mu = x_mu.to(self.device)
+            self.x_std = x_std.to(self.device)
+            self.a_mu = a_mu.to(self.device)
+            self.a_std = a_std.to(self.device)
+
+    def reset(self) -> None:
+        pass
+
+    def act(
+        self,
+        state: Union[torch.Tensor, np.ndarray],
+        task_id: Optional[int] = None,      # unused — policy is task-agnostic
+        first_action: bool = True,           # unused — no receding-horizon planning
+    ) -> torch.Tensor:
+        state_np = state.detach().cpu().numpy() if isinstance(state, torch.Tensor) else np.asarray(state)
+
+        x = torch.tensor(state_np, dtype=torch.float32, device=self.device).unsqueeze(0)
+
+        # 1. env-specific preprocessing (cos/sin of angles, drop x_pos, …)
+        x = _preprocess_state_torch(x, self.env_name)
+
+        # 2. normalise to N(0,1) using per-task statistics
+        if self.normalize_xu and self.x_mu is not None:
+            x = (x - self.x_mu) / self.x_std
+
+        # 3. policy forward pass
+        self.policy.eval()
+        with torch.no_grad():
+            u = self.policy(x).squeeze(0)   # shape (action_dim,), in normalised space
+
+        # 4. denormalise action back to physical space
+        if self.normalize_xu and self.a_mu is not None:
+            u = u * self.a_std + self.a_mu
+
+        # 5. apply safety filter (QP projection)
+        if self.safety_filter is not None:
+            u_safe = self.safety_filter.filter(state_np.flatten(), u.cpu().numpy())
+            u = torch.from_numpy(u_safe).to(u)
+
+        return u
+
+
 class RollOut:
     def __init__(self, hparams, model, collector) -> None:
         self.model = model
