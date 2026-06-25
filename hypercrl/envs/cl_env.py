@@ -192,7 +192,7 @@ class CLEnvHandler():
                 self._env_mt_world = env
             return self.get_env(task_id)
 
-        assert task_id <= len(self._envs)
+        #assert task_id <= len(self._envs) removing since we want an untrained task number which is less then the one already trained.
         if self.cl_env == "lqr":
             env = LQR_2DCar(friction=0.5 * task_id)
         elif self.cl_env == "lqr10":

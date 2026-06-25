@@ -3,20 +3,9 @@
 
 Usage
 -----
-# List trained tasks without running:
-python play.py <run_dir> --list
-
-# Play all trained tasks:
-python play.py <run_dir>
-
-# Play a specific task:
-python play.py <run_dir> --task 1
-
-# Play specific tasks with custom episode count:
-python play.py <run_dir> --task 0 2 --episodes 5
-
-# Run directory looks for example like this:
-runs/lqr/20260617_111148_TBcartpole_single_2020
+python play.py runs/lqr/20260617_111148_TBcartpole_single_2020
+python play.py runs/lqr/20260617_111148_TBcartpole_single_2020 --task 0
+python play.py runs/lqr/20260617_111148_TBcartpole_single_2020 --task 0 --episodes 5
 
 The script reads hparams.csv + tasks.json from the run directory, loads the
 saved model weights, runs the env in render mode, and writes a replay stats
@@ -212,7 +201,7 @@ def save_replay_stats(folder: str, rows: list[dict]) -> str:
 # play loop
 # ---------------------------------------------------------------------------
 
-def play(folder: str, tasks: list[int] | None = None, episodes: int = 10) -> None:
+def play(folder: str, task: int = None, episodes: int = 10) -> None:
     folder = os.path.abspath(folder)
     if not os.path.isdir(folder):
         raise NotADirectoryError(f"Run directory not found: {folder!r}")
@@ -224,11 +213,11 @@ def play(folder: str, tasks: list[int] | None = None, episodes: int = 10) -> Non
         else "cpu"
     )
 
-    # Pick checkpoint file: single-task requests prefer per-task snapshot; otherwise model.pt
+    # Pick checkpoint file: per-task snapshot when available, else model.pt
     ckpt_task_id = None
-    if tasks is not None and len(tasks) == 1:
-        task_pt = os.path.join(_model_dir(folder), f"model_{tasks[0]}.pt")
-        ckpt_task_id = tasks[0] if os.path.isfile(task_pt) else None
+    if task is not None:
+        task_pt = os.path.join(_model_dir(folder), f"model_{task}.pt")
+        ckpt_task_id = task if os.path.isfile(task_pt) else None
 
     checkpoint = load_checkpoint(folder, hparams, task_id=ckpt_task_id)
 
@@ -237,14 +226,7 @@ def play(folder: str, tasks: list[int] | None = None, episodes: int = 10) -> Non
         print("[play] mid-run checkpoint — no completed task yet, playing as task 0")
         num_seen = 1
 
-    tasks_to_play = tasks if tasks is not None else list(range(num_seen))
-
-    # Validate: reject task IDs that were never trained
-    invalid = [t for t in tasks_to_play if t >= num_seen]
-    if invalid:
-        raise ValueError(
-            f"Task(s) {invalid} were never trained — checkpoint has "
-            f"{num_seen} task(s) (0..{num_seen - 1}).")
+    tasks_to_play = [task] if task is not None else list(range(num_seen))
 
     # Print task manifest if available
     tasks_json = os.path.join(folder, "tasks.json")
@@ -274,12 +256,16 @@ def play(folder: str, tasks: list[int] | None = None, episodes: int = 10) -> Non
                 checkpoint = load_checkpoint(folder, hparams, task_id=tid)
                 agent = build_agent(hparams, checkpoint)
 
+        weights_task = tid if tid < num_seen else num_seen - 1 #using weights from last training task
+
+        if weights_task != tid:
+            print(f"[play] task {tid} is untrained — using task {weights_task} weights")
+
         # Restore normalization stats for this task (critical: model was
         # trained on normalised inputs; without this, MPC produces bad actions)
         restore_norms(agent, checkpoint, tid, hparams.device, folder)
 
-        # CLEnvHandler requires sequential registration; fill any gaps silently
-        for skip_id in range(len(envs._envs), tid):
+        for skip_id in range(len(envs._envs), tid): # skipping "missing task" (trained on task 0 and want to play on task 3)
             envs.add_task(skip_id, render=False)
         env = envs.add_task(tid, render=True)
         print(f"--- Task {tid} ---")
@@ -292,7 +278,7 @@ def play(folder: str, tasks: list[int] | None = None, episodes: int = 10) -> Non
 
             while not done:
                 env.render()
-                u_t = agent.act(x_t, task_id=tid).detach().cpu().numpy()
+                u_t = agent.act(x_t, task_id=weights_task).detach().cpu().numpy()
                 x_tt, reward, terminated, truncated, _ = env.step(
                     u_t.reshape(env.action_space.shape))
                 done = terminated or truncated
@@ -330,31 +316,11 @@ if __name__ == "__main__":
         "folder",
         help="Path to the run directory (contains hparams.csv and model/)")
     ap.add_argument(
-        "--task", type=int, nargs="+", default=None, metavar="ID",
-        help="One or more task indices to replay (default: all completed tasks)")
+        "--task", type=int, default=None,
+        help="Task index to replay (default: all completed tasks)")
     ap.add_argument(
         "--episodes", type=int, default=10,
         help="Episodes per task (default: 10)")
-    ap.add_argument(
-        "--list", action="store_true",
-        help="Print trained tasks and exit without running")
     args = ap.parse_args()
 
-    if args.list:
-        folder = os.path.abspath(args.folder)
-        checkpoint = torch.load(
-            os.path.join(folder, "model", "model.pt"),
-            map_location="cpu", weights_only=False)
-        num_seen = max(checkpoint["num_tasks_seen"], 1)
-        tasks_json = os.path.join(folder, "tasks.json")
-        if os.path.isfile(tasks_json):
-            with open(tasks_json) as f:
-                manifest = json.load(f)
-            for t in manifest[:num_seen]:
-                print(f"  task {t['task_id']}: {t.get('params', {}) or '(default)'}")
-        else:
-            for i in range(num_seen):
-                print(f"  task {i}")
-        sys.exit(0)
-
-    play(args.folder, tasks=args.task, episodes=args.episodes)
+    play(args.folder, task=args.task, episodes=args.episodes)
