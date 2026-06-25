@@ -3,9 +3,20 @@
 
 Usage
 -----
-python play.py runs/lqr/20260617_111148_TBcartpole_single_2020
-python play.py runs/lqr/20260617_111148_TBcartpole_single_2020 --task 0
-python play.py runs/lqr/20260617_111148_TBcartpole_single_2020 --task 0 --episodes 5
+# Play all trained tasks:
+python play.py <run_dir>
+
+# Play a specific trained task:
+python play.py <run_dir> --task 0
+
+# Play an untrained task (uses last trained task's weights):
+python play.py <run_dir> --task 3
+
+# Play with custom episode count:
+python play.py <run_dir> --task 0 --episodes 5
+
+# Run directory looks for example like this:
+runs/lqr/20260617_111148_TBcartpole_single_2020
 
 The script reads hparams.csv + tasks.json from the run directory, loads the
 saved model weights, runs the env in render mode, and writes a replay stats
