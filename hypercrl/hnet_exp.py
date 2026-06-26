@@ -13,6 +13,11 @@ from torch.utils.data import DataLoader
 from hypercrl.tools import reset_seed, str_to_act
 from hypercrl.tools import MonitorHnet, HP, Hparams
 from hypercrl.control import RandomAgent, MPC, SafeAgent
+from hypercrl.control.agent import NNPolicyAgent
+from hypercrl.control.policy_net import (PolicyNet, PolicyTrainer,
+                                          make_cheetah_cbf_fn, make_space_cbf_fn,
+                                          make_space_clf_fn)
+from hypercrl.control.agent import _preprocess_state_torch
 from hypercrl.envs.cl_env import CLEnvHandler
 from hypercrl.dataset.datautil import DataCollector
 
@@ -392,6 +397,28 @@ def play_model(hparams):
         avg_reward = np.mean(avg_rewards)
         print(f"Average reward for task {task_id + 1} is {avg_reward}")
 
+def _eval_nn_policy(nn_agent, env, task_id: int, writer, global_step: int) -> None:
+    """Run one episode with the NN policy and log the return to TensorBoard."""
+    x_t, _ = env.reset()
+    nn_agent.reset()
+    done = False
+    ep_reward = 0.0
+    koz_hits = 0
+    while not done:
+        u = nn_agent.act(x_t, task_id=task_id).detach().cpu().numpy()
+        x_tt, reward, terminated, truncated, info = env.step(
+            u.reshape(env.action_space.shape))
+        done = terminated or truncated
+        ep_reward += reward
+        if info.get("keep_out_violation"):
+            koz_hits += 1
+        x_t = x_tt
+
+    writer.add_scalar(f"policy_eval/task_{task_id}/reward",        ep_reward, global_step)
+    writer.add_scalar(f"policy_eval/task_{task_id}/koz_violations", koz_hits,  global_step)
+    print(f"  [policy eval] task {task_id} reward={ep_reward:.2f}  koz_hits={koz_hits}")
+
+
 def run(hparams):
 
     print("[DEBUG run] ENTRY:", hparams.device)
@@ -422,8 +449,17 @@ def run(hparams):
         # Build model
         mnet, hnet = build_model(hparams)
 
-        # RL Agent
+        # RL Agent (MPC expert — also serves as data generator)
         agent = SafeAgent(hparams, mnet, collector=collector, hnet=hnet)
+
+        # Lightweight NN policy that imitates the MPC expert
+        policy = PolicyNet(
+            state_dim=hparams.state_dim,
+            action_dim=hparams.control_dim,
+        ).to(hparams.device)
+        policy_trainer = PolicyTrainer(policy, hparams)
+        policy_trainer._dagger_n_iter = getattr(hparams, "dagger_n_iter", 5)
+        nn_agent = NNPolicyAgent(hparams, policy, collector=collector)
 
         # Monitor
         logger = MonitorHnet(hparams, agent, mnet, hnet, collector)
@@ -460,15 +496,22 @@ def run(hparams):
 
         print(f"Collecting some random data first for task {task_id}")
         x_t, _ = env.reset()
+        rand_koz_hits = 0
         for it in range(hparams.init_rand_steps):
             u = rand_pi.act(x_t)
-            x_tt, _, terminated, truncated, _ = env.step(u.reshape(env.action_space.shape))
+            x_tt, _, terminated, truncated, info = env.step(u.reshape(env.action_space.shape))
             done = terminated or truncated
+            if info.get("keep_out_violation"):
+                rand_koz_hits += 1
             collector.add(x_t, u, x_tt, task_id)
             x_t = x_tt
             logger.data_aggregate_step(x_tt, task_id, it)
+            logger._log_safety(info, task_id, global_step=it)
             if done:
                 x_t, _ = env.reset()
+        print(f"  [random phase] task {task_id} koz_violations={rand_koz_hits}/{hparams.init_rand_steps}")
+        if logger.writer is not None:
+            logger.writer.add_scalar(f"random_phase/task_{task_id}/koz_violations", rand_koz_hits, task_id)
 
         # Augment Model, instantiate optimizers/regularizer targets
         trainer_misc = augment_model(task_id, mnet, hnet, collector, hparams)
@@ -483,6 +526,25 @@ def run(hparams):
                 train_set, _ = collector.get_dataset(task_id)
                 train(task_id, mnet, hnet, trainer_misc, logger, train_set, hparams)
                 print("Training time", time.time() - ts)
+
+                # Rebuild CBF/CLF fns now that per-task norms are finalised.
+                if getattr(hparams, "policy_use_safety_loss", False):
+                    if hparams.env == "half_cheetah_safe":
+                        x_mu, x_std, a_mu, a_std = collector.norm(task_id)
+                        unwrapped = env.unwrapped if hasattr(env, "unwrapped") else env
+                        policy_trainer.cbf_fn = make_cheetah_cbf_fn(
+                            unwrapped.keep_out_zones, x_mu, x_std, a_mu, a_std)
+                    elif hparams.env.startswith("spaceEnv"):
+                        x_mu, x_std, a_mu, a_std = collector.norm(task_id)
+                        _raw_env = env.unwrapped if hasattr(env, 'unwrapped') else env
+                        policy_trainer.cbf_fn = make_space_cbf_fn(
+                            x_mu, x_std, a_mu, a_std, _raw_env.inertia)
+                        policy_trainer.clf_fn = make_space_clf_fn(
+                            x_mu, x_std, a_mu, a_std, _raw_env.inertia)
+
+                # Train NN policy — wait until MPC has collected meaningful data.
+                if it >= getattr(hparams, "policy_train_start", 0):
+                    policy_trainer.train(train_set, writer=logger.writer)
             if getattr(hparams, 'render', False):
                 env.render()
             # Cache the mainnet weight
@@ -502,6 +564,50 @@ def run(hparams):
   
             logger.env_step(x_tt, reward, done, info, task_id)
 
+            # Periodically run one eval episode with the NN policy and log reward
+            if it > 0 and it % hparams.eval_env_run_every == 0:
+                nn_agent.cache_state_norm(task_id)
+                if hasattr(env, 'get_safety_filter'):
+                    nn_agent.set_safety_filter(env.get_safety_filter())
+                _eval_nn_policy(nn_agent, env, task_id, logger.writer, logger.env_iter)
+
+            # DAGGER refinement (Algorithm 1) — run after the initial BC phase.
+            dagger_every = getattr(hparams, "dagger_every", 0)
+            if (dagger_every > 0
+                    and it >= getattr(hparams, "policy_train_start", 0)
+                    and it > 0
+                    and it % dagger_every == 0
+                    and policy_trainer._dagger_iter < getattr(hparams, "dagger_n_iter", 5)):
+                nn_agent.cache_state_norm(task_id)
+
+                # Capture norms for the closure — populated by cache_state_norm above.
+                _x_mu  = nn_agent.x_mu   # (1, proc_dim) on device, or None
+                _x_std = nn_agent.x_std
+                _a_mu  = nn_agent.a_mu.cpu().numpy().flatten() if nn_agent.a_mu is not None else None
+                _a_std = nn_agent.a_std.cpu().numpy().flatten() if nn_agent.a_std is not None else None
+
+                def _preprocess_for_dagger(raw_obs):
+                    import torch as _torch
+                    x = _torch.tensor(raw_obs, dtype=_torch.float32,
+                                      device=hparams.device).unsqueeze(0)
+                    x = _preprocess_state_torch(x, hparams.env)
+                    if nn_agent.normalize_xu and _x_mu is not None:
+                        x = (x - _x_mu) / _x_std
+                    return x
+
+                policy_trainer.dagger_update(
+                    env=env,
+                    mpc_agent=agent,
+                    collector=collector,
+                    task_id=task_id,
+                    preprocess_fn=_preprocess_for_dagger,
+                    n_rollout=getattr(hparams, "dagger_n_rollout", 5),
+                    max_ep_steps=1000,
+                    writer=logger.writer,
+                    a_mu=_a_mu,
+                    a_std=_a_std,
+                )
+
         augment_model_after(task_id, mnet, hnet, hparams, collector)
 
         # Save Model
@@ -510,9 +616,9 @@ def run(hparams):
     envs.close()
     logger.writer.close()
 
-def chunked_hnet(env, seed=None, savepath=None, play=False, render=False):
+def chunked_hnet(env, seed=None, savepath=None, play=False, render=False, run_name=None):
     # Hyperparameters
-    hparams = HP(env, seed, savepath)
+    hparams = HP(env, seed, savepath, run_name=run_name)
     hparams.model = "chunked_hnet"
     hparams.render = render
 
@@ -524,25 +630,23 @@ def chunked_hnet(env, seed=None, savepath=None, play=False, render=False):
         run(hparams)
 
 
-def hnet(env, seed=None, savepath=None, play=False, render=False, device="cpu"):
+def hnet(env, seed=None, savepath=None, play=False, render=False, device="cpu", run_name=None):
     # Hyperparameters
-    hparams = HP(env, seed, savepath)
+    hparams = HP(env, seed, savepath, run_name=run_name)
     hparams.model = "hnet"
     hparams.render = render
     hparams.device = device
 
     hparams = Hparams.add_hnet_hparams(hparams)
-    
-    print("[DEBUG hnet] BEFORE run:", hparams.device)
 
     if play:
         play_model(hparams)
     else:
         run(hparams)
 
-def hnet_si(env, seed=None, savepath=None, play=False):
+def hnet_si(env, seed=None, savepath=None, play=False, run_name=None):
     # Hyperparameters
-    hparams = HP(env, seed, savepath)
+    hparams = HP(env, seed, savepath, run_name=run_name)
     hparams.model = "hnet_si"
 
     hparams = Hparams.add_hnet_hparams(hparams)
@@ -554,9 +658,9 @@ def hnet_si(env, seed=None, savepath=None, play=False):
     else:
         run(hparams)
 
-def hnet_ewc(env, seed=None, savepath=None, play=False):
+def hnet_ewc(env, seed=None, savepath=None, play=False, run_name=None):
     # Hyperparameters
-    hparams = HP(env, seed, savepath)
+    hparams = HP(env, seed, savepath, run_name=run_name)
     hparams.model = "hnet_ewc"
 
     hparams = Hparams.add_hnet_hparams(hparams)
@@ -569,9 +673,9 @@ def hnet_ewc(env, seed=None, savepath=None, play=False):
     else:
         run(hparams)
 
-def hnet_mt(env, seed=None, savepath=None, play=False, render=False):
+def hnet_mt(env, seed=None, savepath=None, play=False, render=False, run_name=None):
     # Hyperparameters
-    hparams = HP(env, seed, savepath)
+    hparams = HP(env, seed, savepath, run_name=run_name)
     hparams.model = "hnet_mt"
     hparams.render = render
 
@@ -584,9 +688,9 @@ def hnet_mt(env, seed=None, savepath=None, play=False, render=False):
     else:
         run(hparams)
 
-def hnet_replay(env, seed=None, savepath=None, play=False, render=False):
+def hnet_replay(env, seed=None, savepath=None, play=False, render=False, run_name=None):
     # Hyperparameters
-    hparams = HP(env, seed, savepath)
+    hparams = HP(env, seed, savepath, run_name=run_name)
     hparams.model = "hnet_replay"
     hparams.render = render
 

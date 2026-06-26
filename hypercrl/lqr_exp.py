@@ -296,9 +296,9 @@ def run(hparams):
     logger.writer.close()
 
 
-def coreset(env, seed=None, savepath=None, play=False, render=False, device=None):
+def coreset(env, seed=None, savepath=None, play=False, render=False, device=None, run_name=None):
     # Hyperparameters
-    hparams = HP(env, seed, savepath)
+    hparams = HP(env, seed, savepath, run_name=run_name)
     hparams.model = "coreset"
     hparams.render = render
     if device is not None:
@@ -310,8 +310,8 @@ def coreset(env, seed=None, savepath=None, play=False, render=False, device=None
         run(hparams)
 
 
-def ewc(env, seed=None, savepath=None, play=False, render=False, device=None):
-    hparams = HP(env, seed, savepath)
+def ewc(env, seed=None, savepath=None, play=False, render=False, device=None, run_name=None):
+    hparams = HP(env, seed, savepath, run_name=run_name)
     hparams.model = "ewc"
     hparams.render = render
     if device is not None:
@@ -329,8 +329,8 @@ def ewc(env, seed=None, savepath=None, play=False, render=False, device=None):
         run(hparams)
 
 
-def si(env, seed=None, savepath=None, play=False, render=False, device=None):
-    hparams = HP(env, seed, savepath)
+def si(env, seed=None, savepath=None, play=False, render=False, device=None, run_name=None):
+    hparams = HP(env, seed, savepath, run_name=run_name)
     hparams.model = "si"
     hparams.render = render
     if device is not None:
@@ -346,9 +346,9 @@ def si(env, seed=None, savepath=None, play=False, render=False, device=None):
         run(hparams)
 
 
-def pnn(env, seed=None, savepath=None, play=False, render=False, device=None):
+def pnn(env, seed=None, savepath=None, play=False, render=False, device=None, run_name=None):
     # Hyperparameters
-    hparams = HP(env, seed, savepath)
+    hparams = HP(env, seed, savepath, run_name=run_name)
     hparams.model = "pnn"
     hparams.render = render
     if device is not None:
@@ -360,9 +360,9 @@ def pnn(env, seed=None, savepath=None, play=False, render=False, device=None):
         run(hparams)
 
 
-def finetune(env, seed=None, savepath=None, play=False, render=False, device=None):
+def finetune(env, seed=None, savepath=None, play=False, render=False, device=None, run_name=None):
     # Hyperparameters
-    hparams = HP(env, seed, savepath)
+    hparams = HP(env, seed, savepath, run_name=run_name)
     hparams.model = "finetune"
     hparams.render = render
     if device is not None:
@@ -374,8 +374,8 @@ def finetune(env, seed=None, savepath=None, play=False, render=False, device=Non
         run(hparams)
 
 
-def multitask(env, seed=None, savepath=None, play=False, render=False, device=None):
-    hparams = HP(env, seed, savepath)
+def multitask(env, seed=None, savepath=None, play=False, render=False, device=None, run_name=None):
+    hparams = HP(env, seed, savepath, run_name=run_name)
     hparams.model = "multitask"
     hparams.mt_reinit = False
     hparams.render = render
@@ -388,8 +388,8 @@ def multitask(env, seed=None, savepath=None, play=False, render=False, device=No
         run(hparams)
 
 
-def single(env, seed=None, savepath=None, play=False, render=False, device=None):
-    hparams = HP(env, seed, savepath)
+def single(env, seed=None, savepath=None, play=False, render=False, device=None, run_name=None):
+    hparams = HP(env, seed, savepath, run_name=run_name)
     hparams.model = "single"
     hparams.render = render
     if device is not None:

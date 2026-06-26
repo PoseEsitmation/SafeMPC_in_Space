@@ -149,7 +149,7 @@ class HalfCheetahSafeEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         # Define what the agent can observe — 18 numbers describing the cheetah's state
         # low=-inf, high=inf means no clipping on observation values
         observation_space = gym.spaces.Box(
-            low=-np.inf, high=np.inf, shape=(18,), dtype=np.float64
+            low=-np.inf, high=np.inf, shape=(19,), dtype=np.float64
         )
 
         # Initialize EzPickle with the same arguments — required for saving/loading the env
@@ -175,8 +175,11 @@ class HalfCheetahSafeEnv(mujoco_env.MujocoEnv, utils.EzPickle):
                 return True
         return False
 
+    def _is_flipped(self) -> bool:
+        """True when the torso pitch exceeds 90 degrees — cheetah is upside-down."""
+        return bool(np.abs(self.data.qpos[2]) > np.pi / 2)
+
     def step(self, action):
-          # Record the cheetah's x-position BEFORE the action is applied
         self.xposbefore = self.data.qpos[0]
         self.do_simulation(action, self.frame_skip)
         xposafter = self.data.qpos[0]
@@ -195,8 +198,19 @@ class HalfCheetahSafeEnv(mujoco_env.MujocoEnv, utils.EzPickle):
                 reward_run=reward_run,
                 reward_ctrl=reward_ctrl,
                 keep_out_violation=True,
+                flipped=False,
                 violated_at=float(xposafter),
                 min_zone_dist=0.0,
+            )
+        elif self._is_flipped():
+            reward     = -self.penalty
+            terminated = True
+            info = dict(
+                reward_run=reward_run,
+                reward_ctrl=reward_ctrl,
+                keep_out_violation=False,
+                flipped=True,
+                min_zone_dist=min_dist,
             )
         else:
             reward     = reward_ctrl + reward_run
@@ -205,6 +219,7 @@ class HalfCheetahSafeEnv(mujoco_env.MujocoEnv, utils.EzPickle):
                 reward_run=reward_run,
                 reward_ctrl=reward_ctrl,
                 keep_out_violation=False,
+                flipped=False,
                 min_zone_dist=min_dist,
             )
 
@@ -276,11 +291,11 @@ class HalfCheetahSafeEnv(mujoco_env.MujocoEnv, utils.EzPickle):
             )
 
     def _get_obs(self):
-          # Combine three sources of information into one flat array:
         return np.concatenate([
-            (self.data.qpos.flat[:1] - self.xposbefore) / self.dt,
-            self.data.qpos.flat[1:],
-            self.data.qvel.flat,
+            (self.data.qpos.flat[:1] - self.xposbefore) / self.dt,  # [0]  x_vel
+            self.data.qpos.flat[1:],                                  # [1-8] z_pos, angle, joints
+            self.data.qvel.flat,                                      # [9-17] velocities
+            self.data.qpos.flat[:1],                                  # [18]  x_pos (global)
         ])
     
     # Reset function — called at the start of every new episode

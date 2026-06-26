@@ -85,7 +85,8 @@ def run_hnet(args):
         savepath=args.savepath,
         play=args.play,
         render=args.rendering,
-        device=args.device
+        device=args.device,
+        run_name=getattr(args, 'name', None),
     )
 
 
@@ -96,7 +97,8 @@ def run_pnn(args):
         seed=args.seed,
         savepath=args.savepath,
         render=args.rendering,
-        device=args.device
+        device=args.device,
+        run_name=getattr(args, 'name', None),
     )
 
 
@@ -107,7 +109,8 @@ def run_ewc(args):
         seed=args.seed,
         savepath=args.savepath,
         render=args.rendering,
-        device=args.device
+        device=args.device,
+        run_name=getattr(args, 'name', None),
     )
 
 
@@ -118,7 +121,8 @@ def run_coreset(args):
         seed=args.seed,
         savepath=args.savepath,
         render=args.rendering,
-        device=args.device
+        device=args.device,
+        run_name=getattr(args, 'name', None),
     )
 
 
@@ -129,7 +133,8 @@ def run_finetune(args):
         seed=args.seed,
         savepath=args.savepath,
         render=args.rendering,
-        device=args.device
+        device=args.device,
+        run_name=getattr(args, 'name', None),
     )
 
 
@@ -140,7 +145,8 @@ def run_si(args):
         seed=args.seed,
         savepath=args.savepath,
         render=args.rendering,
-        device=args.device
+        device=args.device,
+        run_name=getattr(args, 'name', None),
     )
 
 
@@ -151,7 +157,8 @@ def run_multitask(args):
         seed=args.seed,
         savepath=args.savepath,
         render=args.rendering,
-        device=args.device
+        device=args.device,
+        run_name=getattr(args, 'name', None),
     )
 
 
@@ -162,7 +169,8 @@ def run_single(args):
         seed=args.seed,
         savepath=args.savepath,
         render=args.rendering,
-        device=args.device
+        device=args.device,
+        run_name=getattr(args, 'name', None),
     )
 
 
@@ -173,7 +181,8 @@ def run_chunked_hnet(args):
         seed=args.seed,
         savepath=args.savepath,
         render=args.rendering,
-        device=args.device
+        device=args.device,
+        run_name=getattr(args, 'name', None),
     )
 
 
@@ -184,7 +193,8 @@ def run_hnet_mt(args):
         seed=args.seed,
         savepath=args.savepath,
         render=args.rendering,
-        device=args.device
+        device=args.device,
+        run_name=getattr(args, 'name', None),
     )
 
 
@@ -195,7 +205,8 @@ def run_hnet_replay(args):
         seed=args.seed,
         savepath=args.savepath,
         render=args.rendering,
-        device=args.device
+        device=args.device,
+        run_name=getattr(args, 'name', None),
     )
 
 
@@ -247,6 +258,7 @@ def main():
     run_parser.add_argument("--play", action="store_true")
     run_parser.add_argument("--device", type=str, default=None)
     run_parser.add_argument("--rendering", action="store_true")
+    run_parser.add_argument("--name", type=str, default=None, help="Optional name suffix for the run directory")
 
     args = parser.parse_args()
 

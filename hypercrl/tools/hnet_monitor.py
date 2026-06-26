@@ -52,6 +52,14 @@ class MonitorHnet(MonitorRL):
             l2_vel = np.linalg.norm(x_tt[10:])
             self.writer.add_scalar(f'lqr10/{task_id}/l2_pos', l2_pos, it)
             self.writer.add_scalar(f'lqr10/{task_id}/l2_vel', l2_vel, it)
+        elif self.hparams.env.startswith("spaceEnv") and x_tt is not None:
+            import numpy as np
+            theta_margin_deg = np.degrees((x_tt[7] + 1.0) * (3 * np.pi / 4) - np.pi / 2)
+            att_err_deg = 2 * np.degrees(np.arccos(np.clip(np.abs(x_tt[0]), 0.0, 1.0)))
+            omega_norm_degs = np.degrees(np.linalg.norm(x_tt[4:7]) * 5.0)
+            self.writer.add_scalar(f'random_phase/task_{task_id}/theta_margin_deg', theta_margin_deg, it)
+            self.writer.add_scalar(f'random_phase/task_{task_id}/attitude_error_deg', att_err_deg, it)
+            self.writer.add_scalar(f'random_phase/task_{task_id}/omega_norm_degs', omega_norm_degs, it)
 
     def validate_task(self, task_id, loader, mll, is_training=False):
         self.mnet.eval()
