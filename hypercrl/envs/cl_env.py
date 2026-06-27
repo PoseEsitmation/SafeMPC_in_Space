@@ -192,7 +192,7 @@ class CLEnvHandler():
                 self._env_mt_world = env
             return self.get_env(task_id)
 
-        assert task_id <= len(self._envs)
+        #assert task_id <= len(self._envs) removing since we want an untrained task number which is less then the one already trained.
         if self.cl_env == "lqr":
             env = LQR_2DCar(friction=0.5 * task_id)
         elif self.cl_env == "lqr10":
@@ -284,10 +284,12 @@ class CLEnvHandler():
             env = GymWrapper(env)
         elif self.cl_env == "spaceEnv_moi":
             from .space_KOZ import SatDynEnv
-            env = SatDynEnv(**SPACE_MOI_ENVS[task_id])
+            env = SatDynEnv(**SPACE_MOI_ENVS[task_id],
+                            render_mode="human" if render else None)
         elif self.cl_env == "spaceEnv":
             from .space_KOZ import SatDynEnv
-            env = SatDynEnv(**SPACE_ENV_PRESETS[task_id])
+            env = SatDynEnv(**SPACE_ENV_PRESETS[task_id],
+                            render_mode="human" if render else None)
         if not self.cl_env.startswith("lqr"):
             if hasattr(env, 'seed'):
                 env.seed(self.seed)

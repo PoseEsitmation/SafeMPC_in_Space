@@ -3,9 +3,20 @@
 
 Usage
 -----
-python play.py runs/lqr/20260617_111148_TBcartpole_single_2020
-python play.py runs/lqr/20260617_111148_TBcartpole_single_2020 --task 0
-python play.py runs/lqr/20260617_111148_TBcartpole_single_2020 --task 0 --episodes 5
+# Play all trained tasks:
+python play.py <run_dir>
+
+# Play a specific trained task:
+python play.py <run_dir> --task 0
+
+# Play an untrained task (uses last trained task's weights):
+python play.py <run_dir> --task 3
+
+# Play with custom episode count:
+python play.py <run_dir> --task 0 --episodes 5
+
+# Run directory looks for example like this:
+runs/lqr/20260617_111148_TBcartpole_single_2020
 
 The script reads hparams.csv + tasks.json from the run directory, loads the
 saved model weights, runs the env in render mode, and writes a replay stats
@@ -256,10 +267,20 @@ def play(folder: str, task: int = None, episodes: int = 10) -> None:
                 checkpoint = load_checkpoint(folder, hparams, task_id=tid)
                 agent = build_agent(hparams, checkpoint)
 
+        weights_task = tid if tid < num_seen else num_seen - 1 #using weights from last training task
+
+        if weights_task != tid:
+            print(f"[play] task {tid} is untrained — using task {weights_task} weights")
+
         # Restore normalization stats for this task (critical: model was
         # trained on normalised inputs; without this, MPC produces bad actions)
         restore_norms(agent, checkpoint, tid, hparams.device, folder)
 
+        # CLEnvHandler._envs is indexed by position, so tasks must be added in order.
+        # If tid > len(_envs), fill the gap with dummy envs (render=False) so that
+        # _envs[tid] exists when we call add_task(tid) below.
+        for skip_id in range(len(envs._envs), tid):
+            envs.add_task(skip_id, render=False)
         env = envs.add_task(tid, render=True)
         print(f"--- Task {tid} ---")
 
@@ -271,7 +292,7 @@ def play(folder: str, task: int = None, episodes: int = 10) -> None:
 
             while not done:
                 env.render()
-                u_t = agent.act(x_t, task_id=tid).detach().cpu().numpy()
+                u_t = agent.act(x_t, task_id=weights_task).detach().cpu().numpy() #weights_task specifying weights for task (->learned/not learned)
                 x_tt, reward, terminated, truncated, _ = env.step(
                     u_t.reshape(env.action_space.shape))
                 done = terminated or truncated
@@ -282,7 +303,8 @@ def play(folder: str, task: int = None, episodes: int = 10) -> None:
             ep_len = len(rewards)
             print(f"  ep {ep + 1}/{episodes}  reward={ep_reward:.1f}  steps={ep_len}")
             stat_rows.append({
-                "task": tid,
+                "task": tid,  # environment identity, not weights_task (may differ for untrained tasks)
+                "weights_task": weights_task, #information on weights used to produce those results
                 "episode": ep,
                 "reward": ep_reward,
                 "steps": ep_len,
