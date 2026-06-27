@@ -276,7 +276,10 @@ def play(folder: str, task: int = None, episodes: int = 10) -> None:
         # trained on normalised inputs; without this, MPC produces bad actions)
         restore_norms(agent, checkpoint, tid, hparams.device, folder)
 
-        for skip_id in range(len(envs._envs), tid): # skipping "missing task" (trained on task 0 and want to play on task 3)
+        # CLEnvHandler._envs is indexed by position, so tasks must be added in order.
+        # If tid > len(_envs), fill the gap with dummy envs (render=False) so that
+        # _envs[tid] exists when we call add_task(tid) below.
+        for skip_id in range(len(envs._envs), tid):
             envs.add_task(skip_id, render=False)
         env = envs.add_task(tid, render=True)
         print(f"--- Task {tid} ---")
@@ -289,7 +292,7 @@ def play(folder: str, task: int = None, episodes: int = 10) -> None:
 
             while not done:
                 env.render()
-                u_t = agent.act(x_t, task_id=weights_task).detach().cpu().numpy()
+                u_t = agent.act(x_t, task_id=weights_task).detach().cpu().numpy() #weights_task specifying weights for task (->learned/not learned)
                 x_tt, reward, terminated, truncated, _ = env.step(
                     u_t.reshape(env.action_space.shape))
                 done = terminated or truncated
@@ -300,7 +303,8 @@ def play(folder: str, task: int = None, episodes: int = 10) -> None:
             ep_len = len(rewards)
             print(f"  ep {ep + 1}/{episodes}  reward={ep_reward:.1f}  steps={ep_len}")
             stat_rows.append({
-                "task": tid,
+                "task": tid,  # environment identity, not weights_task (may differ for untrained tasks)
+                "weights_task": weights_task, #information on weights used to produce those results
                 "episode": ep,
                 "reward": ep_reward,
                 "steps": ep_len,
