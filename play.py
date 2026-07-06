@@ -60,6 +60,14 @@ def _parse_csv_value(val_str, current):
         return float(val_str)
     if isinstance(current, list):
         return ast.literal_eval(val_str)
+    if val_str[:1] in "[({":
+        # "current" is unknown (attribute absent on the freshly-built default
+        # hparams, e.g. hnet_arch for envs whose default_arg_* fn skips
+        # add_hnet_hparams), but the CSV value still looks like a literal.
+        try:
+            return ast.literal_eval(val_str)
+        except (ValueError, SyntaxError):
+            pass
     try:
         return int(val_str)
     except ValueError:
