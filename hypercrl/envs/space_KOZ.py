@@ -1,9 +1,21 @@
 # Satellite attitude control env with Keep-Out Zone (Phase 1).
 # State (13,): [qe(4), omega_e(3), theta_margin(1), theta(1), rel_avoid_in_b(3), qe_0_prev(1)]
 # Action (3,): normalised torques in [-1, 1], scaled by scale_torque [Nm]
+#
+# CBF/CLF additions (coexist with existing KOZ penalty, obs shape unchanged at 13):
+#   CBF  h(x)  = theta - half_angle  (= theta_margin, already in state[7])
+#   CLF  V(x)  = 1 - qe_0^2          (zero at perfect alignment qe_0 -> +-1)
+#
+#   CBF condition:  dh/dt >= -alpha_cbf * h(x)
+#   CLF condition:  dV/dt <=  gamma_clf * V(x)   (with slack, CBF takes priority)
+#
+#   QP safety filter projects the agent's action onto the feasible set before
+#   it is applied to the plant. Penalties for condition violations are added
+#   to the reward on top of the existing exponential KOZ penalty.
 
 import math
 
+import cvxpy as cp
 import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
@@ -113,7 +125,9 @@ def random_angular_rate(rate_bound=0.0):
 
 # --- reward function ---
 
-def reward_function_with_Fzone(state, action):
+def reward_function_with_Fzone(state, action, cbf_penalty=0.0, clf_penalty=0.0):
+    # cbf_penalty / clf_penalty: computed externally in step() from the CBF/CLF
+    # filter conditions; default 0.0 so nothing breaks if called without them.
     if not hasattr(reward_function_with_Fzone, 'action_prev'):
         reward_function_with_Fzone.action_prev = action.copy()
 
@@ -144,26 +158,214 @@ def reward_function_with_Fzone(state, action):
         - 0.005 * torque_change
         - penalty_f_zone
         - progress_penalty
+        - cbf_penalty   # CBF violation penalty (0 when condition satisfied)
+        - clf_penalty   # CLF violation penalty (0 when condition satisfied)
     )
 
     if err_phi_current <= 0.25 * np.pi / 180:
         return reward0 + 9
     return reward0
 
+# --- CBF / CLF safety filter ---
+
+class CBFCLFFilter:
+    """
+    QP-based safety filter that projects a proposed action u onto the set of
+    actions satisfying the CBF constraint (hard) and the CLF constraint (soft).
+
+    Barrier function  h(x)  = theta - half_angle   (= theta_margin)
+    Lyapunov function V(x)  = 1 - qe_0^2
+
+    CBF condition (discrete-time approximation):
+        [h(x_next) - h(x)] / dt  >=  -alpha_cbf * h(x)
+
+    CLF condition (discrete-time approximation):
+        [V(x_next) - V(x)] / dt  <=  gamma_clf * V(x)   (with slack delta)
+
+    The Jacobians of h and V w.r.t. the action u are derived from the
+    linearised rotational dynamics omega_dot = I^{-1} * torque (dominant
+    term; the gyroscopic coupling is small and handled by RK4 in step()).
+
+    Parameters
+    ----------
+    inertia      : (3,3) array - satellite inertia tensor
+    dt           : float       - integration timestep [s]
+    scale_torque : float       - action-to-torque scaling [Nm]
+    alpha_cbf    : float       - CBF decay rate  (larger -> tighter safety)
+    gamma_clf    : float       - CLF decay rate  (larger -> faster convergence)
+    beta_cbf     : float       - penalty weight for CBF violation in reward
+    beta_clf     : float       - penalty weight for CLF violation in reward
+    """
+
+    def __init__(self, inertia, dt, scale_torque,
+                 alpha_cbf=1.0, gamma_clf=0.5,
+                 beta_cbf=3.0, beta_clf=3.0):
+        self.inertia_inv  = np.linalg.inv(inertia).astype(np.float64)
+        self.dt           = dt
+        self.scale_torque = scale_torque
+        self.alpha_cbf    = alpha_cbf
+        self.gamma_clf    = gamma_clf
+        self.beta_cbf     = beta_cbf
+        self.beta_clf     = beta_clf
+
+    def _dh_du(self, state, f_zone):
+        """
+        Gradient of h = theta_margin w.r.t. normalised action u (shape (3,)).
+
+        dh/du = dh/d(avoid_b) * d(avoid_b)/d(omega) * d(omega)/du
+        d(omega)/du = I^{-1} * scale_torque
+        d(avoid_b)/d(omega) ~= -[avoid_b]_x * dt  (skew-symmetric cross-product matrix)
+        dh/d(avoid_b) = -boresight_b / sin(theta)
+        """
+        q      = state[:4].astype(np.float64)
+        theta  = float(state[8])
+
+        boresight_b = f_zone.boresight_vector_in_b.astype(np.float64)
+        avoid_vec_i = f_zone.avoid_vector_in_i.astype(np.float64)
+
+        q_abs   = self._quat_mul(np.array([1., 0., 0., 0.]), q)  # q_desired = [1,0,0,0]
+        avoid_b = self._rotate_vec(avoid_vec_i, self._quat_conj(q_abs))
+
+        sin_theta = math.sin(theta)
+        if abs(sin_theta) < 1e-6:
+            # singularity (theta ~ 0 or pi): gradient ill-defined -> zero
+            return np.zeros(3)
+
+        dh_davoid     = -boresight_b / sin_theta
+        skew_avoid    = self._skew(avoid_b)
+        davoid_domega = -skew_avoid * self.dt
+        domega_du     = self.inertia_inv * self.scale_torque
+
+        dh_du = dh_davoid @ davoid_domega @ domega_du
+        return dh_du
+
+    def _dV_du(self, state):
+        """
+        Gradient of V = 1 - qe_0^2 w.r.t. normalised action u (shape (3,)).
+
+        dV/d(qe_0) = -2 * qe_0
+        d(qe_0)/d(omega) = -0.5 * qe_1:3   (quaternion kinematics scalar part)
+        d(omega)/du = I^{-1} * scale_torque
+        """
+        qe_0 = float(state[0])
+        qe_v = state[1:4].astype(np.float64)
+
+        dV_dqe0     = -2.0 * qe_0
+        dqe0_domega = -0.5 * qe_v * self.dt
+        domega_du   = self.inertia_inv * self.scale_torque
+
+        dV_du = dV_dqe0 * (dqe0_domega @ domega_du)
+        return dV_du
+
+    def filter_action(self, u_proposed, state, f_zone):
+        """
+        Project u_proposed onto the CBF-safe, CLF-convergent feasible set.
+
+        Returns
+        -------
+        u_safe    : (3,) corrected action in [-1, 1]
+        cbf_viol  : float >= 0, magnitude of CBF condition violation BEFORE filtering
+        clf_viol  : float >= 0, magnitude of CLF condition violation BEFORE filtering
+        """
+        u_proposed = np.asarray(u_proposed, dtype=np.float64)
+
+        h_val = float(state[7])           # theta_margin
+        V_val = 1.0 - float(state[0])**2  # CLF value
+
+        dh = self._dh_du(state, f_zone)
+        dV = self._dV_du(state)
+
+        cbf_rhs = -self.alpha_cbf * h_val
+        clf_rhs =  self.gamma_clf * V_val
+
+        # measure violations BEFORE filtering (for reward penalties)
+        cbf_residual = float(dh @ u_proposed) - cbf_rhs
+        clf_residual = float(dV @ u_proposed) - clf_rhs
+        cbf_viol = self.beta_cbf * max(0.0, -cbf_residual)
+        clf_viol = self.beta_clf * max(0.0,  clf_residual)
+
+        u_var = cp.Variable(3)
+        delta = cp.Variable(1, nonneg=True)   # CLF slack
+
+        objective = cp.Minimize(cp.sum_squares(u_var - u_proposed))
+        constraints = [
+            dh @ u_var >= cbf_rhs,             # CBF: hard safety constraint
+            dV @ u_var <= clf_rhs + delta,      # CLF: soft convergence constraint
+            u_var >= -1.0,
+            u_var <=  1.0,
+        ]
+
+        prob = cp.Problem(objective, constraints)
+        try:
+            prob.solve(solver=cp.OSQP, warm_starting=True, verbose=False,
+                       eps_abs=1e-4, eps_rel=1e-4, max_iter=4000)
+        except cp.SolverError:
+            return u_proposed.astype(np.float32), cbf_viol, clf_viol
+
+        if u_var.value is None:
+            return u_proposed.astype(np.float32), cbf_viol, clf_viol
+
+        u_safe = np.clip(u_var.value, -1.0, 1.0).astype(np.float32)
+        return u_safe, cbf_viol, clf_viol
+
+    @staticmethod
+    def _skew(v):
+        """3x3 skew-symmetric matrix for cross product: skew(v) @ w = v x w."""
+        return np.array([
+            [ 0,    -v[2],  v[1]],
+            [ v[2],  0,    -v[0]],
+            [-v[1],  v[0],  0   ],
+        ], dtype=np.float64)
+
+    @staticmethod
+    def _quat_mul(q1, q2):
+        w1, x1, y1, z1 = q1
+        w2, x2, y2, z2 = q2
+        return np.array([
+            w1*w2 - x1*x2 - y1*y2 - z1*z2,
+            w1*x2 + x1*w2 + y1*z2 - z1*y2,
+            w1*y2 - x1*z2 + y1*w2 + z1*x2,
+            w1*z2 + x1*y2 - y1*x2 + z1*w2,
+        ], dtype=np.float64)
+
+    @staticmethod
+    def _quat_conj(q):
+        return np.array([q[0], -q[1], -q[2], -q[3]], dtype=np.float64)
+
+    @staticmethod
+    def _rotate_vec(v, q):
+        """Rotate 3-vector v by unit quaternion q: v' = q (x) [0;v] (x) q*."""
+        q = q.astype(np.float64)
+        v_quat = np.array([0., v[0], v[1], v[2]], dtype=np.float64)
+        res = CBFCLFFilter._quat_mul(
+            CBFCLFFilter._quat_mul(q, v_quat),
+            CBFCLFFilter._quat_conj(q)
+        )
+        return res[1:4]
+
 # --- environment ---
 
 class SatDynEnv(gym.Env):
-    # Satellite attitude control with a single KOZ. See module header for state/action layout.
+    # Satellite attitude control with a single KOZ, CBF safety filter, and
+    # CLF convergence enforcement. See module header for state/action layout.
 
     def __init__(self, angle_bound_lower=80, angle_bound_upper=180,
              beta=10, alpha=66, scale_torque=2,
-             time_per_episode=100, time_per_step=0.1, inertia=None):
+             time_per_episode=100, time_per_step=0.1, inertia=None,
+             alpha_cbf=1.0, gamma_clf=0.5,
+             beta_cbf=3.0, beta_clf=3.0):
         super().__init__()
         self._angle_bound_lower = angle_bound_lower  # initial attitude error range [deg]
         self._angle_bound_upper = angle_bound_upper
         self._beta              = beta               # KOZ violation penalty magnitude
         self._alpha             = alpha              # KOZ penalty decay rate near boundary
         self._scale_torque      = scale_torque       # max thruster torque per axis [Nm]
+
+        # CBF / CLF parameters
+        self._alpha_cbf = alpha_cbf   # CBF decay rate
+        self._gamma_clf = gamma_clf   # CLF decay rate
+        self._beta_cbf  = beta_cbf    # CBF violation penalty weight
+        self._beta_clf  = beta_clf    # CLF violation penalty weight
 
         self.action_space = spaces.Box(low=-1, high=1, shape=(3,), dtype=np.float32)
 
@@ -202,6 +404,17 @@ class SatDynEnv(gym.Env):
         self.max_steps = int(time_per_episode / self.dt)
         self.steps     = 0
         self.f_zone    = None
+
+        # CBF/CLF filter (built after self.inertia is resolved above)
+        self.cbf_clf_filter = CBFCLFFilter(
+            inertia      = self.inertia,
+            dt           = self.dt,
+            scale_torque = self._scale_torque,
+            alpha_cbf    = self._alpha_cbf,
+            gamma_clf    = self._gamma_clf,
+            beta_cbf     = self._beta_cbf,
+            beta_clf     = self._beta_clf,
+        )
 
         self.state = np.zeros(13, dtype=np.float32)  # placeholder until reset() runs
         self.reset()
@@ -279,8 +492,15 @@ class SatDynEnv(gym.Env):
         inertia_inv  = np.linalg.inv(self.inertia)
         qe_0_prev    = self.state[0]
 
-        # RK4 integration
-        torque = action * scale_torque
+        # CBF/CLF QP filter: measure pre-filter violations (for reward
+        # penalties) and correct the action so it satisfies the CBF
+        # constraint before integration.
+        action_safe, cbf_penalty, clf_penalty = self.cbf_clf_filter.filter_action(
+            action, self.state, self.f_zone
+        )
+
+        # RK4 integration (uses the safety-filtered action)
+        torque = action_safe * scale_torque
         f1 = self.dt * sat_ode(self.state[:7], self.inertia, inertia_inv, torque)
         f2 = self.dt * sat_ode(self.state[:7] + 0.5*f1, self.inertia, inertia_inv, torque)
         f3 = self.dt * sat_ode(self.state[:7] + 0.5*f2, self.inertia, inertia_inv, torque)
@@ -308,7 +528,11 @@ class SatDynEnv(gym.Env):
         self.state[9:12] = rel_avoid_b
         self.state[12]   = qe_0_prev
 
-        reward = reward_function_with_Fzone(self.state, action)
+        reward = reward_function_with_Fzone(
+            self.state, action_safe,
+            cbf_penalty=cbf_penalty,
+            clf_penalty=clf_penalty,
+        )
 
         self.steps += 1
         done = self.steps >= self.max_steps
@@ -443,3 +667,127 @@ class SatDynEnv(gym.Env):
             [theta_margin_norm], [theta_norm],
             rel_avoid_norm, [qe0_prev_norm],
         ), dtype=np.float32)
+
+
+# --- validation environment (held-out, NOT used for training) ---
+#
+# The agent is never trained here. It exists purely to check whether a
+# trained policy generalises to a larger Keep-Out Zone it has never seen.
+#
+# The ONLY behavioural difference from SatDynEnv is the half_angle sampling
+# range in reset():
+#     Training   : uniform(15°, min(half_angle_max, 30°))
+#     Validation : uniform(30°, min(half_angle_max, 60°))
+#
+# Everything else (state shape, action shape, dynamics, reward, CBF/CLF
+# filter, inertia handling, rendering) is inherited unchanged from SatDynEnv.
+
+VAL_KOZ_MIN_DEG = 30.0   # starts exactly where training's upper bound ends
+VAL_KOZ_MAX_DEG = 60.0   # unseen upper bound
+
+
+class SatDynEnvValidation(SatDynEnv):
+    """
+    Held-out validation environment. Subclasses SatDynEnv and overrides only
+    the KOZ half_angle sampling in reset(); everything else (dynamics,
+    reward, CBF/CLF filter, inertia handling, rendering) is reused as-is.
+    """
+
+    def __init__(self, *args, val_koz_min_deg=VAL_KOZ_MIN_DEG,
+                 val_koz_max_deg=VAL_KOZ_MAX_DEG, **kwargs):
+        self._val_koz_min_deg = val_koz_min_deg
+        self._val_koz_max_deg = val_koz_max_deg
+        self._current_half_angle_deg = 0.0
+        super().__init__(*args, **kwargs)
+
+    def reset(self, seed=None, options=None):
+        # Run gymnasium's seeding first (mirrors SatDynEnv.reset() behaviour)
+        gym.Env.reset(self, seed=seed)
+
+        if hasattr(reward_function_with_Fzone, 'action_prev'):
+            del reward_function_with_Fzone.action_prev
+
+        q_e_initial   = random_unit_quat_with_angle_bound(angle_bound_lower, angle_bound_upper)
+        omega_initial = random_angular_rate(rate_bound=1.0e-3 * np.pi / 180)
+        q_abs_initial = quaternion_multiply(self.q_desired_array, q_e_initial)
+
+        boresight_b      = boresight_vector_in_b_global.copy()
+        boresight_b_quat = np.concatenate(([0.0], boresight_b))
+
+        boresight_i_initial_quat = quaternion_multiply(
+            q_abs_initial, quaternion_multiply(boresight_b_quat, quaternion_conj(q_abs_initial))
+        )
+        boresight_i_desired_quat = quaternion_multiply(
+            self.q_desired_array, quaternion_multiply(boresight_b_quat, quaternion_conj(self.q_desired_array))
+        )
+
+        ratio1 = np.random.uniform(vector_rotation_angle1_ratio_low, vector_rotation_angle1_ratio_high)
+        angle2 = np.random.uniform(vector_rotation_angle2_low, vector_rotation_angle2_high)
+
+        avoid_vec_i, half_angle_max = generate_avoid_vector_in_i_for_1Fzone_phase1_v2(
+            boresight_b,
+            boresight_i_initial_quat[1:4],
+            boresight_i_desired_quat[1:4],
+            q_abs_initial,
+            q_e_initial,
+            ratio1,
+            angle2,
+        )
+
+        if half_angle_max == 0.0:
+            half_angle = 0.0
+            self._current_half_angle_deg = 0.0
+        else:
+            # KEY DIFFERENCE FROM TRAINING ENV (SatDynEnv.reset):
+            # Training   : uniform(15°, min(half_angle_max, 30°))
+            # Validation : uniform(30°, min(half_angle_max, 60°))
+            val_max = np.minimum(half_angle_max, self._val_koz_max_deg)
+
+            if val_max <= self._val_koz_min_deg:
+                # geometry too tight to place a large KOZ - use whatever fits
+                half_angle = val_max * deg2rad
+            else:
+                half_angle = np.random.uniform(self._val_koz_min_deg, val_max) * deg2rad
+
+            self._current_half_angle_deg = half_angle * rad2deg
+
+        self.f_zone = KeepOutZone(boresight_b, avoid_vec_i, half_angle)
+
+        avoid_vec_i_quat = np.concatenate(([0.0], avoid_vec_i))
+        avoid_vec_b_quat = quaternion_multiply(
+            quaternion_conj(q_abs_initial), quaternion_multiply(avoid_vec_i_quat, q_abs_initial)
+        )
+
+        theta        = np.arccos(np.clip(np.inner(avoid_vec_b_quat[1:4], boresight_b), -1.0, 1.0))
+        theta_margin = theta - half_angle
+
+        rel_avoid_b = avoid_vec_b_quat[1:4] - boresight_b
+        rel_avoid_b = rel_avoid_b / np.linalg.norm(rel_avoid_b)
+
+        self.state = np.concatenate((
+            q_e_initial, omega_initial,
+            [theta_margin], [theta],
+            rel_avoid_b,
+            [q_e_initial[0]],
+        ), dtype=np.float32)
+
+        self.steps = 0
+        return self._normalise(), {}
+
+    def step(self, action):
+        # Reuse SatDynEnv.step() exactly, then attach validation-only logging
+        # (KOZ size this episode, violation flag) to the info dict.
+        obs, reward, done, truncated, info = super().step(action)
+        info["half_angle_deg"] = self._current_half_angle_deg
+        info["koz_violation"]  = bool(self.state[7] <= 0)
+        return obs, reward, done, truncated, info
+
+    def render(self):
+        err_deg = 2 * np.degrees(math.acos(np.clip(self.state[0], -1.0, 1.0)))
+        print(
+            f"[VAL] step={self.steps:4d}  "
+            f"att_err={err_deg:.2f}deg  "
+            f"theta_margin={self.state[7]*rad2deg:.2f}deg  "
+            f"KOZ_half={self._current_half_angle_deg:.1f}deg"
+        )
+        self._pyvista_render()
