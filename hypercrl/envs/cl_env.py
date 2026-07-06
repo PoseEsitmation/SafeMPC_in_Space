@@ -83,13 +83,6 @@ SPACE_MOI_ENVS = [
     {"inertia": [[80, 2, 0], [2, 80, 0], [0, 0, 20]]},        # Task 3 — oblate (flat disk shape)
 ]
 
-# Held-out validation task — agent is NEVER trained on this. Uses
-# SatDynEnvValidation, which samples KOZ half_angle from an unseen
-# 30°–60° range (training samples from 15°–30°). See space_KOZ.py.
-SPACE_VAL_ENVS = [
-    {},   # Task 0 — validation: unseen larger KOZ half_angle range
-]
-
 
 
 
@@ -127,7 +120,6 @@ class EnvSpecs():
         "door_pose": 7,
         "spaceEnv": 3,
         "spaceEnv_moi": 3,
-        "spaceEnv_val": 3,
     }
 
     x_dims = {
@@ -147,7 +139,6 @@ class EnvSpecs():
         "door_pose": 10,
         "spaceEnv": 13,
         "spaceEnv_moi": 13,
-        "spaceEnv_val": 13,
     }
 
     @classmethod
@@ -294,9 +285,6 @@ class CLEnvHandler():
         elif self.cl_env == "spaceEnv_moi":
             from .space_KOZ import SatDynEnv
             env = SatDynEnv(**SPACE_MOI_ENVS[task_id])
-        elif self.cl_env == "spaceEnv_val":
-            from .space_KOZ import SatDynEnvValidation
-            env = SatDynEnvValidation(**SPACE_VAL_ENVS[task_id % len(SPACE_VAL_ENVS)])
         elif self.cl_env == "spaceEnv":
             from .space_KOZ import SatDynEnv
             env = SatDynEnv(**SPACE_ENV_PRESETS[task_id])
@@ -350,8 +338,6 @@ class CLEnvHandler():
             desc["gym_id"] = REACHER_ENVS[task_id] if task_id < len(REACHER_ENVS) else None
         elif env_name == "spaceEnv_moi":
             desc["params"] = SPACE_MOI_ENVS[task_id] if task_id < len(SPACE_MOI_ENVS) else {}
-        elif env_name == "spaceEnv_val":
-            desc["params"] = SPACE_VAL_ENVS[task_id] if task_id < len(SPACE_VAL_ENVS) else {}
         elif env_name.startswith("spaceEnv"):
             desc["params"] = SPACE_ENV_PRESETS[task_id] if task_id < len(SPACE_ENV_PRESETS) else {}
         elif env_name == "door_pose":
