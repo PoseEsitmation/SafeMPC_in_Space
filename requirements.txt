@@ -14,3 +14,5 @@ pyrr==0.10.3
 gymnasium>=0.26.0,<1.0.0
 pyvista
 scipy
+pytest==8.4.1
+numba==0.61.2
