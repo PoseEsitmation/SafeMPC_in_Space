@@ -21,6 +21,7 @@ from torch.utils.data import DataLoader
 from hypercrl import dataset
 
 from hypercrl import dataset
+from hypercrl.control.safety_filter import SafetyFilter
 from hypercrl.envs.cl_env import CLEnvHandler, EnvSpecs
 
 
@@ -141,12 +142,20 @@ class MonitorBase():
         if getattr(hparams, 'resume', False):
             self.tflog_dir = find_run_dir(hparams)
         else:
-            timestamp = time.strftime('%Y%m%d_%H%M%S')
-            run_name = getattr(hparams, 'run_name', '')
-            name_suffix = f'_{run_name}' if run_name else ''
-            self.tflog_dir = os.path.join(
-                hparams.save_folder,
-                f'{timestamp}_TB{hparams.env}_{hparams.model}_{hparams.seed}{name_suffix}')
+            run_name = getattr(hparams, 'run_name', '') or ''
+            if run_name:
+                base = os.path.join(hparams.save_folder, run_name)
+                candidate = base
+                counter = 1
+                while os.path.exists(candidate):
+                    candidate = f'{base}_{counter}'
+                    counter += 1
+                self.tflog_dir = candidate
+            else:
+                timestamp = time.strftime('%Y%m%d_%H%M%S')
+                self.tflog_dir = os.path.join(
+                    hparams.save_folder,
+                    f'{timestamp}_TB{hparams.env}_{hparams.model}_{hparams.seed}')
         self.model_dir = os.path.join(self.tflog_dir, 'model')
         os.makedirs(hparams.save_folder, exist_ok=True)
         os.makedirs(self.tflog_dir, exist_ok=True)
@@ -344,6 +353,13 @@ class MonitorRL(MonitorBase):
         self.rewards = []
         self.koz_violations = 0       # KOZ violation counter, reset each episode
         self._filter_activations = 0  # steps safety filter was active this episode
+        # Per-episode breakdown of *how* the filter acted (SafetyFilter.TYPE_*):
+        # corrected = hard-CBF QP projected the action, fallback = hard CBF was
+        # infeasible (soft-CBF least-unsafe action), failed = QP error and the
+        # unfiltered action went to the env.
+        self._filter_corrected = 0
+        self._filter_fallback = 0
+        self._filter_failed = 0
         self._min_theta_margin_deg = float('inf')  # worst margin this episode
         self._att_err_final_deg = float('nan')     # attitude error at last step
 
@@ -391,10 +407,18 @@ class MonitorRL(MonitorBase):
             self._min_theta_margin_deg = min(self._min_theta_margin_deg, theta_margin_deg)
             self._att_err_final_deg    = att_err_deg
 
-        # Track filter activation count per episode
+        # Track filter activation count + type breakdown per episode
         sf = getattr(getattr(self, 'agent', None), 'safety_filter', None)
-        if sf is not None and sf.last_was_active:
-            self._filter_activations += 1
+        if sf is not None:
+            if sf.last_was_active:
+                self._filter_activations += 1
+            last_type = getattr(sf, 'last_type', SafetyFilter.TYPE_INACTIVE)
+            if last_type == SafetyFilter.TYPE_CORRECTED:
+                self._filter_corrected += 1
+            elif last_type == SafetyFilter.TYPE_FALLBACK:
+                self._filter_fallback += 1
+            elif last_type == SafetyFilter.TYPE_FAILED:
+                self._filter_failed += 1
 
         if self.hparams.env == "half_cheetah_safe" and info is not None:
             if info.get('keep_out_violation'):
@@ -423,19 +447,38 @@ class MonitorRL(MonitorBase):
                 self.writer.add_scalar(
                     f'train_env/task_{task_id}/filter_fraction',
                     self._filter_activations / max(eplen, 1),                                         self.env_iter)
+                self.writer.add_scalar(
+                    f'train_env/task_{task_id}/filter_corrected',     self._filter_corrected,         self.env_iter)
+                self.writer.add_scalar(
+                    f'train_env/task_{task_id}/filter_fallback',      self._filter_fallback,          self.env_iter)
+                self.writer.add_scalar(
+                    f'train_env/task_{task_id}/filter_failed',        self._filter_failed,            self.env_iter)
                 if not np.isnan(self._att_err_final_deg):
                     self.writer.add_scalar(
                         f'train_env/task_{task_id}/att_err_final_deg', self._att_err_final_deg,       self.env_iter)
+                print(
+                    f"Step: {self.env_iter}, Reward: {eprew:.3f}, Episode Length {eplen}, "
+                    f"koz={self.koz_violations}, "
+                    f"filter={self._filter_activations / max(eplen, 1):.0%} "
+                    f"(corrected {self._filter_corrected}, fallback {self._filter_fallback}, "
+                    f"failed {self._filter_failed}), "
+                    f"min_margin={self._min_theta_margin_deg:.1f}deg")
                 self.koz_violations         = 0
                 self._min_theta_margin_deg  = float('inf')
                 self._filter_activations    = 0
+                self._filter_corrected      = 0
+                self._filter_fallback       = 0
+                self._filter_failed         = 0
                 self._att_err_final_deg     = float('nan')
             elif self.hparams.env == "half_cheetah_safe":
                 self.writer.add_scalar(
                     f'train_env/task_{task_id}/koz_violations', self.koz_violations, self.env_iter)
                 self.koz_violations = 0
-            print(
-                f"Step: {self.env_iter}, Reward: {eprew:.3f}, Episode Length {eplen}")
+                print(
+                    f"Step: {self.env_iter}, Reward: {eprew:.3f}, Episode Length {eplen}")
+            else:
+                print(
+                    f"Step: {self.env_iter}, Reward: {eprew:.3f}, Episode Length {eplen}")
             self.rewards = []
 
         self._log_safety(info, task_id)
@@ -505,17 +548,24 @@ class MonitorRL(MonitorBase):
                 step,
             )
 
-        # CBF / CLF values from the safety filter (SafeAgent only)
+        # CBF / CLF values from the safety filter (SafeAgent only).
+        # last_H stays NaN until the filter's first call after a task starts,
+        # so the NaN check also keeps the random phase (filter never runs, but
+        # _log_safety is still called) from writing stale filter scalars into
+        # the same per-task tags the training phase uses.
         sf = getattr(getattr(self, 'agent', None), 'safety_filter', None)
         if sf is not None:
             import math
             if not math.isnan(sf.last_H):
                 self.writer.add_scalar(f'{prefix}/cbf_H',        sf.last_H,            step)
-            if not math.isnan(sf.last_V):
-                self.writer.add_scalar(f'{prefix}/clf_V',        sf.last_V,            step)
-            self.writer.add_scalar(f'{prefix}/filter_active',    float(sf.last_was_active), step)
-            self.writer.add_scalar(f'{prefix}/cbf_slack',        sf.last_cbf_slack,    step)
-            self.writer.add_scalar(f'{prefix}/filter_du_norm',   sf.last_du_norm,      step)
+                if not math.isnan(sf.last_V):
+                    self.writer.add_scalar(f'{prefix}/clf_V',    sf.last_V,            step)
+                self.writer.add_scalar(f'{prefix}/filter_active',    float(sf.last_was_active), step)
+                self.writer.add_scalar(f'{prefix}/cbf_slack',        sf.last_cbf_slack,    step)
+                self.writer.add_scalar(f'{prefix}/filter_du_norm',   sf.last_du_norm,      step)
+                self.writer.add_scalar(
+                    f'{prefix}/filter_type',
+                    float(getattr(sf, 'last_type', SafetyFilter.TYPE_INACTIVE)), step)
 
     def log_xu_norm(self, task_id):
         if self.hparams.normalize_xu == False:

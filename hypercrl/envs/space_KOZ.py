@@ -167,23 +167,16 @@ class SatDynEnv(gym.Env):
 
         self.action_space = spaces.Box(low=-1, high=1, shape=(3,), dtype=np.float32)
 
+        # All 13 components are normalised to [-1, 1] by _normalise():
+        #   [0:4]  q_e          — unit-quaternion components
+        #   [4:7]  omega/5      — angular rate divided by scale_omega
+        #   [7]    theta_margin_norm = -1 + (margin + π/2)*4/(3π)
+        #   [8]    theta_norm   = -1 + theta*2/π
+        #   [9:12] rel_avoid_b  — unit-vector difference components
+        #   [12]   qe_0_prev    — previous scalar quaternion component
         self.observation_space = spaces.Box(
-            low=np.array([
-                -1, -1, -1, -1,
-                -scale_omega, -scale_omega, -scale_omega,
-                -np.pi / 2,
-                0,
-                -1, -1, -1,
-                -1,
-            ], dtype=np.float32),
-            high=np.array([
-                1, 1, 1, 1,
-                scale_omega, scale_omega, scale_omega,
-                np.pi,
-                np.pi,
-                1, 1, 1,
-                1,
-            ], dtype=np.float32),
+            low=-np.ones(13, dtype=np.float32),
+            high=np.ones(13, dtype=np.float32),
         )
 
         self.q_desired_array   = q_desired_array_global.copy()
@@ -403,11 +396,18 @@ class SatDynEnv(gym.Env):
         c_w: float = 0.1,
         zeta_min: float = 0.001,
         zeta_max: float = 0.06,
+        j: float = 5.0,
+        c: float = 0.6,
     ) -> SpaceAttitudeCLF:
-        return SpaceAttitudeCLF(self, c_q=c_q, c_w=c_w, zeta_min=zeta_min, zeta_max=zeta_max)
+        return SpaceAttitudeCLF(self, c_q=c_q, c_w=c_w, zeta_min=zeta_min,
+                                zeta_max=zeta_max, j=j, c=c)
 
     def get_safety_filter(
         self,
+        # ε > 0 keeps a margin off the safe-set boundary to cover the dt=0.1
+        # discretization gap (paper Sec. IV-A uses ε = 0.01): with ε = 0 a
+        # single discrete step can tunnel across H = 0 before the one-step QP
+        # can react.
         cbf_epsilon: float = 0.01,
         clf_rho: float = 0.001,
         gamma: float = 0.5,

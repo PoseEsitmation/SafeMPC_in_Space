@@ -59,23 +59,31 @@ class CLF(ABC):
 class SafetyFilter:
     """QP safety filter: projects u_proposed onto the CBF-feasible set.
 
-    Solves at every timestep::
-
-        min  ||u - u_proposed||^2 + clf_rho * delta^2
-        s.t. H_dot_expr(s, u) >= cbf_epsilon       (CBF — hard)
-             V_dot_expr(s, u) <= delta              (CLF — soft, delta >= 0)
-             -u_max <= u <= u_max                   (box constraint)
-
-    The CLF constraint is omitted when ``clf=None``.
-    On any solver failure ``u_proposed`` is returned unchanged and a warning
-    is logged.
+    Primary QP (paper Eq. 19): hard CBF constraint, soft CLF.
+    Fallback QP: soft CBF with large slack penalty — activated only when the
+    hard CBF constraint has no feasible solution (drift exceeds control
+    authority or state has crossed H=0).  Returns the least-unsafe action
+    instead of abandoning correction.
 
     Usage::
 
         sf = SafetyFilter(cbf=env.get_cbf(), clf=env.get_clf(),
-                          u_max=1.0, control_dim=6)
+                          u_max=1.0, control_dim=3)
         u_safe = sf.filter(state, u_proposed)
     """
+
+    # Penalty on CBF slack in the fallback QP.  Large enough to strongly
+    # prefer hard feasibility; bounded so the fallback always has an optimum.
+    _CBF_SLACK_RHO: float = 1e6
+
+    # Activation-type codes for ``last_type`` (logged per step to TensorBoard).
+    # Ordered by severity: anything >= TYPE_FALLBACK means the hard CBF
+    # constraint could not be satisfied within the actuator box.
+    # QP feasible, u_proposed already safe (no correction)
+    TYPE_INACTIVE:  int = 0
+    TYPE_CORRECTED: int = 1   # QP feasible, action projected onto the CBF-safe set
+    TYPE_FALLBACK:  int = 2   # hard CBF infeasible -> soft-CBF least-unsafe action
+    TYPE_FAILED:    int = 3   # both QPs errored -> u_proposed passed through unfiltered
 
     def __init__(
         self,
@@ -85,7 +93,6 @@ class SafetyFilter:
         control_dim: int = 3,
         cbf_epsilon: float = 0.0,
         clf_rho: float = 1e3,
-        cbf_rho: float = 1e6,
     ) -> None:
         self.cbf = cbf
         self.clf = clf
@@ -93,77 +100,127 @@ class SafetyFilter:
         self.control_dim = control_dim
         self.cbf_epsilon = cbf_epsilon
         self.clf_rho = clf_rho
-        self.cbf_rho = cbf_rho   # penalty for CBF slack — high = near-hard constraint
 
         # Populated after every filter() call; read by the monitor for TensorBoard.
         self.last_H: float = float("nan")
         self.last_V: float = float("nan")
         self.last_was_active: bool = False
         self.last_cbf_slack: float = 0.0
-        self.last_du_norm: float = 0.0   # ‖u_safe − u_proposed‖ — correction magnitude
+        self.last_du_norm: float = 0.0   # ‖u_safe − u_proposed‖
+        # Outcome of the last filter() call (TYPE_* code) — every consumer
+        # (monitor episode counters, safety/filter_type scalar, eval fallback
+        # counting) reads this; it MUST be assigned in every filter() branch.
+        self.last_type: int = self.TYPE_INACTIVE
+
+        # Consecutive steps using the soft-CBF fallback (0 = primary is feasible).
+        self._fallback_count: int = 0
 
     def filter(self, state: np.ndarray, u_proposed: np.ndarray) -> np.ndarray:
         """Return the safe action closest (in L2) to u_proposed.
-
-        Both CBF and CLF constraints use slack variables so the QP is always
-        feasible.  CBF slack is penalised at ``cbf_rho`` (default 1e6, near-hard);
-        CLF slack at ``clf_rho`` (default 1e3, soft — stability is secondary).
 
         Parameters
         ----------
         state:
             Current environment observation, shape ``(state_dim,)``.
         u_proposed:
-            Action from the MPC optimizer, shape ``(control_dim,)``.
+            Proposed action, shape ``(control_dim,)``.
 
         Returns
         -------
         np.ndarray
             Safe action, shape ``(control_dim,)``.  Falls back to
-            ``u_proposed`` if the QP cannot be solved even with slacks.
+            ``u_proposed`` only if both QP formulations fail with a solver error.
         """
         u_ref = u_proposed.flatten()[: self.control_dim]
-        u         = cp.Variable(self.control_dim)
-        delta_cbf = cp.Variable(nonneg=True)   # CBF slack — penalised heavily
-
-        objective_terms = [cp.sum_squares(u - u_ref),
-                           self.cbf_rho * cp.square(delta_cbf)]
-
-        constraints: list = [
-            u >= -self.u_max,
-            u <= self.u_max,
-            # CBF: soft with high penalty so QP is always feasible
-            self.cbf.H_dot_expr(state, u) + delta_cbf >= self.cbf_epsilon,
-        ]
-
-        if self.clf is not None:
-            delta_clf = cp.Variable(nonneg=True)
-            constraints.append(self.clf.V_dot_expr(state, u) <= delta_clf)
-            objective_terms.append(self.clf_rho * cp.square(delta_clf))
 
         self.last_H = float(self.cbf.H(state))
-        self.last_V = float(self.clf.V(state)) if self.clf is not None else float("nan")
+        self.last_V = float(self.clf.V(
+            state)) if self.clf is not None else float("nan")
 
-        prob = cp.Problem(cp.Minimize(sum(objective_terms)), constraints)
+        # ── Primary QP: hard CBF (paper Eq. 19) ─────────────────────────────
+        # Constraint construction stays inside the try: H_dot_expr/V_dot_expr
+        # evaluate the state (e.g. NaN checks, divisions) and an error there
+        # must degrade to the fallback/pass-through path, not crash training.
         try:
-            # CLARABEL handles large coefficient ratios (cbf_rho=1e6 vs O(1) terms)
-            # much better than OSQP's ADMM which hits user_limit on ill-conditioned problems.
+            u = cp.Variable(self.control_dim)
+            obj_terms: list = [cp.sum_squares(u - u_ref)]
+            csts: list = [
+                u >= -self.u_max,
+                u <= self.u_max,
+                self.cbf.H_dot_expr(
+                    state, u) >= self.cbf_epsilon,   # hard (Eq. 19b)
+            ]
+            if self.clf is not None:
+                delta_clf = cp.Variable(nonneg=True)
+                csts.append(self.clf.V_dot_expr(state, u) <= delta_clf)
+                obj_terms.append(self.clf_rho * cp.square(delta_clf))
+
+            prob = cp.Problem(cp.Minimize(sum(obj_terms)), csts)
+            # CLARABEL handles mixed constraint types better than OSQP's ADMM.
             prob.solve(solver=cp.CLARABEL)
             if prob.status in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE) and u.value is not None:
+                if self._fallback_count > 0:
+                    logger.warning(
+                        "SafetyFilter: hard CBF feasible again after %d fallback step(s)",
+                        self._fallback_count,
+                    )
+                    self._fallback_count = 0
                 u_safe = u.value.astype(np.float64)
-                self.last_du_norm     = float(np.linalg.norm(u_safe - u_ref))
-                self.last_was_active  = self.last_du_norm > 1e-4
-                self.last_cbf_slack   = float(delta_cbf.value) if delta_cbf.value is not None else 0.0
-                if self.last_cbf_slack > 1e-4:
-                    logger.debug("SafetyFilter CBF slack=%.4f (H=%.4f)", self.last_cbf_slack, self.last_H)
+                self.last_du_norm = float(np.linalg.norm(u_safe - u_ref))
+                self.last_was_active = self.last_du_norm > 1e-4
+                self.last_cbf_slack = 0.0
+                self.last_type = (self.TYPE_CORRECTED if self.last_was_active
+                                  else self.TYPE_INACTIVE)
                 return u_safe
         except Exception as exc:
-            logger.warning("SafetyFilter QP exception: %s", exc)
+            logger.warning("SafetyFilter primary QP exception: %s", exc)
+
+        # ── Fallback QP: soft CBF ─────────────────────────────────────────────
+        # Hard CBF was infeasible (no u in the box can satisfy Ḣ ≥ ε).
+        # Return the least-unsafe action rather than passing u_proposed unchanged.
+        self._fallback_count += 1
+        if self._fallback_count == 1:
+            logger.warning(
+                "SafetyFilter: hard CBF infeasible (H=%.4f), switching to soft-CBF fallback",
+                self.last_H,
+            )
+        elif self._fallback_count % 500 == 0:
+            logger.warning(
+                "SafetyFilter: still in soft-CBF fallback for %d steps (H=%.4f)",
+                self._fallback_count, self.last_H,
+            )
+
+        try:
+            u2 = cp.Variable(self.control_dim)
+            delta_cbf2 = cp.Variable(nonneg=True)
+            obj2: list = [cp.sum_squares(
+                u2 - u_ref), self._CBF_SLACK_RHO * cp.square(delta_cbf2)]
+            csts2: list = [
+                u2 >= -self.u_max,
+                u2 <= self.u_max,
+                self.cbf.H_dot_expr(state, u2) + delta_cbf2 >= self.cbf_epsilon,
+            ]
+            if self.clf is not None:
+                delta_clf2 = cp.Variable(nonneg=True)
+                csts2.append(self.clf.V_dot_expr(state, u2) <= delta_clf2)
+                obj2.append(self.clf_rho * cp.square(delta_clf2))
+
+            prob2 = cp.Problem(cp.Minimize(sum(obj2)), csts2)
+            prob2.solve(solver=cp.CLARABEL)
+            if prob2.status in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE) and u2.value is not None:
+                u_safe = u2.value.astype(np.float64)
+                self.last_du_norm = float(np.linalg.norm(u_safe - u_ref))
+                self.last_was_active = self.last_du_norm > 1e-4
+                self.last_cbf_slack = float(
+                    delta_cbf2.value) if delta_cbf2.value is not None else 0.0
+                self.last_type = self.TYPE_FALLBACK
+                return u_safe
+        except Exception as exc2:
+            logger.warning("SafetyFilter fallback QP exception: %s", exc2)
 
         logger.warning(
-            "SafetyFilter: solver status=%s — returning u_proposed unchanged",
-            getattr(prob, "status", "unknown"),
-        )
+            "SafetyFilter: all QP formulations failed — returning u_proposed unchanged")
         self.last_was_active = False
-        self.last_cbf_slack  = float("nan")
+        self.last_cbf_slack = float("nan")
+        self.last_type = self.TYPE_FAILED
         return u_proposed.copy()

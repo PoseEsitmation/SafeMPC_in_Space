@@ -89,6 +89,15 @@ class DataCollector():
         self.diff_norms: Dict[int, Tuple] = {}
         self.env_name: str = hparams.env
 
+        # Frozen-normaliser mode: once freeze_norms()/load_frozen_norms() runs,
+        # the Welford aggregation stops and every task shares one fixed affine
+        # transform.  This keeps the normalised coordinate system stationary
+        # for the whole run — normalised data stored in buffers/closures can
+        # never go stale, and all tasks see the same input distribution.
+        self.frozen: bool = False
+        self._frozen_norms: Optional[Tuple] = None
+        self._frozen_diff_norms: Optional[Tuple] = None
+
     def num_tasks(self):
         return len(self.states)
 
@@ -160,18 +169,22 @@ class DataCollector():
 
         x_t, u, x_tt = self.preprocess(x_t, u, x_tt)
 
+        # No stat updates once frozen — the transform is fixed for the run.
+        update_stats = not getattr(self, "frozen", False)
+
         if task_id in self.states:
             self.states[task_id].append(x_t)
             self.actions[task_id].append(u)
             self.nexts[task_id].append(x_tt)
             self.cbf_values[task_id].append(cbf_val)
             self.clf_values[task_id].append(clf_val)
-            if self.normalize_xu:
+            if self.normalize_xu and update_stats:
                 self.x_aggregate[task_id] = self.update(
                     self.x_aggregate[task_id], x_t)
                 self.a_aggregate[task_id] = self.update(
                     self.a_aggregate[task_id], u)
-            if getattr(self, "normalize_diff", False) and self.next_mode == "diff":
+            if update_stats and getattr(self, "normalize_diff", False) \
+                    and self.next_mode == "diff":
                 self.dx_aggregate[task_id] = self.update(
                     self.dx_aggregate[task_id], x_tt)
         else:
@@ -180,10 +193,11 @@ class DataCollector():
             self.nexts[task_id] = [x_tt]
             self.cbf_values[task_id] = [cbf_val]
             self.clf_values[task_id] = [clf_val]
-            if self.normalize_xu:
+            if self.normalize_xu and update_stats:
                 self.x_aggregate[task_id] = self.update((0, 0, 0), x_t)
                 self.a_aggregate[task_id] = self.update((0, 0, 0), u)
-            if getattr(self, "normalize_diff", False) and self.next_mode == "diff":
+            if update_stats and getattr(self, "normalize_diff", False) \
+                    and self.next_mode == "diff":
                 self.dx_aggregate[task_id] = self.update((0, 0, 0), x_tt)
 
         # Train or val
@@ -201,6 +215,15 @@ class DataCollector():
                 self.val_inds[task_id] = [ind]
 
     def finalize(self, task_id):
+        # Frozen mode: statistics are fixed for the whole run.  A task seen
+        # for the first time simply adopts the shared frozen transform.
+        if getattr(self, "frozen", False):
+            if task_id not in self.norms:
+                self.norms[task_id] = self._frozen_norms
+                if self._frozen_diff_norms is not None:
+                    self.diff_norms[task_id] = self._frozen_diff_norms
+            return self.norms[task_id]
+
         def one(existingAggregate):
             (count, mean, M2) = existingAggregate
             if count < 2:
@@ -227,6 +250,43 @@ class DataCollector():
 
         return self.norms[task_id]
 
+    def freeze_norms(self, task_id: int, identity_actions: bool = True) -> Tuple:
+        """Fix the normalisation statistics permanently for this run.
+
+        Computes the stats from the data collected so far for ``task_id``
+        (typically at the end of the first random phase), then freezes them:
+        the Welford aggregation stops and every subsequent task reuses the
+        same affine transform, so normalised coordinates never drift and
+        stored normalised data can never go stale.  Idempotent — calling it
+        again (e.g. for a later task) only assigns the existing frozen stats.
+
+        With ``identity_actions`` the action transform is fixed to
+        (mu=0, std=1): the action space is already a physically meaningful
+        [-1, 1] box, so expert labels keep their physical scale.
+        """
+        if self._frozen_norms is None:
+            x_mu, x_std, a_mu, a_std = self.finalize(task_id)
+            if identity_actions:
+                a_mu, a_std = torch.zeros_like(a_mu), torch.ones_like(a_std)
+            self._frozen_norms = (x_mu, x_std, a_mu, a_std)
+            self._frozen_diff_norms = self.diff_norms.get(task_id)
+        self.frozen = True
+        self.norms[task_id] = self._frozen_norms
+        if self._frozen_diff_norms is not None:
+            self.diff_norms[task_id] = self._frozen_diff_norms
+        return self._frozen_norms
+
+    def load_frozen_norms(self, norms: Tuple,
+                          diff_norms: Optional[Tuple] = None) -> None:
+        """Adopt normalisation statistics saved by a previous run and freeze.
+
+        No statistics are computed from this run's data; every task uses the
+        loaded transform from the very first transition.
+        """
+        self._frozen_norms = tuple(norms)
+        self._frozen_diff_norms = tuple(diff_norms) if diff_norms is not None else None
+        self.frozen = True
+
     def norm(self, task_id: int) -> Tuple:
         return self.norms[task_id]
 
@@ -243,10 +303,17 @@ class DataCollector():
         """
         return self.cbf_values[task_id], self.clf_values[task_id]
 
-    def get_dataset(self, task_id, ds_range=None):
+    def get_dataset(self, task_id, ds_range=None, skip_first_n=0):
         """
         Return a pytorch dataset of (state, actions, next_state)
         states, actions are normalized to N(0, 1)
+
+        skip_first_n:
+            Exclude the task's first N transitions (both splits).  Transitions
+            are indexed in add() order, so N = init_rand_steps drops exactly
+            the random-exploration phase — used for the policy's BC dataset,
+            whose "expert labels" would otherwise include RandomAgent noise.
+            The dynamics model keeps the full set (wide excitation helps it).
         """
 
         states = torch.FloatTensor(np.hstack(self.states[task_id])).T
@@ -266,6 +333,10 @@ class DataCollector():
 
         train_inds = self.train_inds[task_id]
         val_inds = self.val_inds[task_id]
+
+        if skip_first_n > 0:
+            train_inds = [i for i in train_inds if i >= skip_first_n]
+            val_inds = [i for i in val_inds if i >= skip_first_n]
 
         if ds_range == "second_half":
             train_inds = train_inds[len(train_inds) // 2:]

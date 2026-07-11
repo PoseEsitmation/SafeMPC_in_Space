@@ -87,6 +87,8 @@ def run_hnet(args):
         render=args.rendering,
         device=args.device,
         run_name=getattr(args, 'name', None),
+        num_tasks=getattr(args, 'num_tasks', None),
+        norms_path=getattr(args, 'norms_path', None),
     )
 
 
@@ -259,6 +261,10 @@ def main():
     run_parser.add_argument("--device", type=str, default=None)
     run_parser.add_argument("--rendering", action="store_true")
     run_parser.add_argument("--name", type=str, default=None, help="Optional name suffix for the run directory")
+    run_parser.add_argument("--num-tasks", type=int, default=None, dest="num_tasks",
+                             help="Override the number of continual-learning tasks (e.g. 1 for a single-task validation run)")
+    run_parser.add_argument("--norms-path", type=str, default=None, dest="norms_path",
+                             help="Path to a norms.pt saved by a previous run; reuses its frozen normalisation stats so both runs share the same coordinate system")
 
     args = parser.parse_args()
 

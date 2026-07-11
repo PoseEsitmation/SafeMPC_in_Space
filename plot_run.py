@@ -174,6 +174,92 @@ def draw_episode_stats(ax, d):
     ax.legend(l1 + l2, lb1 + lb2, fontsize=7, loc="upper right")
 
 
+def draw_filter_activation(ax, d):
+    """Filter activation breakdown — safety of the environment at a glance.
+
+    Stacked bars: share of env steps per bin, split by what the QP filter did.
+        green      inactive   proposed action already satisfied the CBF
+        amber      corrected  QP projected the action; hard CBF held → safe
+        red        fallback   hard CBF infeasible; least-unsafe action only
+        dark red   failed     QP error; unfiltered action reached the env
+    Fallback + failed are the steps where safety was NOT guaranteed.
+    Overlay (right axis): % of steps actually inside the KOZ per bin.
+
+    Falls back to the binary `filter_active` tag (inactive/corrected only) for
+    runs that predate the per-step `filter_type` scalar.
+    """
+    steps, types = d["sf_steps6"], d["sf_type"]
+    legacy = len(steps) == 0
+    if legacy:
+        steps, types = d["sf_steps3"], d["sf_active"]
+    if len(steps) == 0:
+        ax.text(0.5, 0.5, "no safety-filter data",
+                transform=ax.transAxes, ha="center", va="center",
+                fontsize=9, color="grey")
+        ax.set_title("Filter Activation Breakdown", fontsize=9)
+        return
+    types = np.round(types).astype(int)
+
+    n_bins = int(min(60, max(10, len(steps) // 200)))
+    edges = np.linspace(steps.min(), steps.max() + 1, n_bins + 1)
+    centers = (edges[:-1] + edges[1:]) / 2
+    width = np.diff(edges) * 0.92
+    bin_idx = np.clip(np.digitize(steps, edges) - 1, 0, n_bins - 1)
+
+    CLASSES = [
+        (0, "inactive (action already safe)", C_SAFE),
+        (1, "corrected (QP projection, safe)", C_FILTER),
+        (2, "fallback (CBF infeasible!)",      C_DANGER),
+        (3, "QP failed (unfiltered!)",         "#4a0d0d"),
+    ]
+    if legacy:
+        # Old runs only logged binary filter_active — fallback/failed steps are
+        # folded into "corrected" and cannot be separated retroactively.
+        CLASSES = [
+            (0, "inactive (action already safe)", C_SAFE),
+            (1, "active (type breakdown n/a — legacy run)", C_FILTER),
+        ]
+    counts = np.zeros((len(CLASSES), n_bins))
+    for c, _, _ in CLASSES:
+        np.add.at(counts[c], bin_idx[types == c], 1)
+    tot = np.maximum(counts.sum(axis=0), 1)
+    overall = counts.sum(axis=1) / max(counts.sum(), 1) * 100
+
+    bottom = np.zeros(n_bins)
+    for c, label, color in CLASSES:
+        ax.bar(centers, counts[c] / tot * 100, width=width, bottom=bottom,
+               color=color, alpha=0.85, linewidth=0,
+               label=f"{label} — {overall[c]:.1f}%")
+        bottom += counts[c] / tot * 100
+
+    ax.set_ylim(0, 100)
+    ax.set_ylabel("Share of steps (%)")
+    ax.set_xlabel("Env step")
+    ax.set_title("Filter Activation Breakdown — how safety was maintained",
+                 fontsize=9, fontweight="bold")
+
+    # KOZ violation rate per bin (ground truth of "how safe the env was")
+    ax2 = ax.twinx()
+    if len(d["tr_steps"]) > 0:
+        vidx = np.clip(np.digitize(d["tr_steps"], edges) - 1, 0, n_bins - 1)
+        vsum = np.zeros(n_bins)
+        vcnt = np.zeros(n_bins)
+        np.add.at(vsum, vidx, (d["tr_margin"] < 0).astype(float))
+        np.add.at(vcnt, vidx, 1)
+        vrate = vsum / np.maximum(vcnt, 1) * 100
+        ax2.plot(centers, vrate, "o-", color="#2c3e50", lw=1.6, ms=3.5,
+                 label=f"KOZ violation rate — {vsum.sum()/max(vcnt.sum(),1)*100:.2f}% overall")
+        ax2.set_ylim(bottom=0)
+    ax2.set_ylabel("KOZ violation rate (%)", fontsize=8, color="#2c3e50")
+    ax2.tick_params(axis="y", labelcolor="#2c3e50", labelsize=7)
+    ax2.spines["top"].set_visible(False)
+
+    l1, lb1 = ax.get_legend_handles_labels()
+    l2, lb2 = ax2.get_legend_handles_labels()
+    ax.legend(l1 + l2, lb1 + lb2, fontsize=7, loc="center left",
+              framealpha=0.9)
+
+
 def draw_cbf_barrier(ax, d):
     sf_steps = d["sf_steps"]
     sf_H = d["sf_H"]
@@ -236,16 +322,15 @@ def draw_policy_losses(ax, d):
 
 
 def draw_rewards(ax, d):
+    """Expert reward & KOZ violations.  NN-policy eval traces intentionally
+    left out — the NN policy has its own dedicated charts (post-DAGGER
+    validation)."""
     tr_ep_rew_s = d["tr_ep_rew_s"]
     tr_ep_rew = d["tr_ep_rew"]
     ev_rew_s = d["ev_rew_s"]
     ev_rew = d["ev_rew"]
-    pev_rew_s = d["pev_rew_s"]
-    pev_rew = d["pev_rew"]
     ev_koz_s = d["ev_koz_s"]
     ev_koz = d["ev_koz"]
-    pev_koz_s = d["pev_koz_s"]
-    pev_koz = d["pev_koz"]
 
     if len(tr_ep_rew_s) > 0:
         ax.plot(tr_ep_rew_s, tr_ep_rew, "o-", color=C_SAFE,
@@ -253,19 +338,12 @@ def draw_rewards(ax, d):
     if len(ev_rew_s) > 0:
         ax.plot(ev_rew_s, ev_rew, "s-", color=C_EVAL_EXPERT,
                 lw=1.5, ms=4, label="Eval env (hnet MPC)")
-    if len(pev_rew_s) > 0:
-        ax.plot(pev_rew_s, pev_rew, "^-", color=C_NN,
-                lw=1.5, ms=5, label="NN policy eval")
 
     ax2 = ax.twinx()
     plotted_koz = False
     if len(ev_koz_s) > 0:
         ax2.plot(ev_koz_s, ev_koz, "s--", color=C_EVAL_EXPERT,
                  lw=1, ms=4, alpha=0.6, label="Eval KOZ violations")
-        plotted_koz = True
-    if len(pev_koz_s) > 0:
-        ax2.plot(pev_koz_s, pev_koz, "^--", color=C_NN,
-                 lw=1, ms=4, alpha=0.6, label="NN KOZ violations")
         plotted_koz = True
     if plotted_koz:
         ax2.set_ylabel("KOZ violations / episode", fontsize=8)
@@ -310,6 +388,110 @@ def draw_dagger_curriculum(ax, d):
     ax.legend(l1 + l2, lb1 + lb2, fontsize=7)
 
 
+def draw_dagger_validation(ax, d):
+    """Post-DAGGER validation: does the *raw learned policy* stay safe once the
+    QP filter is removed?  Answers whether DAGGER is teaching real safety or
+    the filter is just papering over an unsafe policy.
+
+    Filtered and unfiltered eval are run back-to-back after every DAGGER
+    iteration on the same (dedicated, non-training) env and logged at the
+    same policy step, so both series and `dag_iter` line up index-for-index.
+    """
+    u_koz = d["dv_u_koz"]
+    f_koz = d["dv_f_koz"]
+    u_margin = d["dv_u_margin"]
+
+    n = len(u_koz)
+    if n == 0:
+        ax.text(0.5, 0.5, "no dagger_eval_unfiltered data yet",
+                transform=ax.transAxes, ha="center", va="center",
+                fontsize=9, color="grey")
+        ax.set_title("Post-DAGGER Validation (filter on/off)", fontsize=9)
+        return
+
+    it = np.arange(1, n + 1)
+    width = 0.28
+    ax.bar(it - width, u_koz, width, color=C_DANGER, alpha=0.85,
+           label="unfiltered koz violations")
+    if len(f_koz) == n:
+        ax.bar(it, f_koz, width, color=C_SAFE, alpha=0.85,
+               label="filtered koz violations")
+    # KOZ hits during the unfiltered DAGGER rollouts themselves (baseline_22+):
+    # nonzero early means the buffer is receiving near-KOZ avoidance labels;
+    # this and the unfiltered validation bars should fall together.
+    dag_rkoz = d.get("dag_rkoz", [])
+    if len(dag_rkoz) == n:
+        ax.bar(it + width, dag_rkoz, width, color="#e67e22", alpha=0.7,
+               label="rollout koz (label source)")
+    ax.set_xticks(it)
+    ax.set_ylabel("KOZ violations / episode (mean)")
+
+    ax2 = ax.twinx()
+    if len(u_margin) == n:
+        ax2.plot(it, u_margin, "D-", color="#8e44ad", lw=1.5, ms=5,
+                  label="unfiltered min θ margin (deg)")
+        ax2.axhline(0, color=C_DANGER, lw=1, ls="--", alpha=0.6)
+    ax2.set_ylabel("Min θ margin (deg)", color="#8e44ad", fontsize=8)
+    ax2.tick_params(axis="y", labelcolor="#8e44ad", labelsize=7)
+    ax2.spines["top"].set_visible(False)
+
+    ax.set_title("Post-DAGGER Validation — policy safety with filter OFF vs ON",
+                 fontsize=9)
+    ax.set_xlabel("DAgger iteration")
+    l1, lb1 = ax.get_legend_handles_labels()
+    l2, lb2 = ax2.get_legend_handles_labels()
+    ax.legend(l1 + l2, lb1 + lb2, fontsize=7, loc="upper right")
+
+
+def draw_filter_reliance(ax, d):
+    """Headline DAGGER result: the NN policy needs the safety filter less and
+    less.  Plots the filter's intervention rate on the *policy's own* actions
+    (dagger_eval_filtered/filter_fraction) per DAGGER iteration, with the
+    unfiltered KOZ violations as context — both should fall together as the
+    policy internalises the avoidance behaviour."""
+    frac = np.asarray(d.get("dv_f_filtfrac", []), dtype=float)
+    fb   = np.asarray(d.get("dv_f_fbfrac",   []), dtype=float)
+    du   = np.asarray(d.get("dv_f_du",       []), dtype=float)
+    ukoz = np.asarray(d.get("dv_u_koz",      []), dtype=float)
+
+    n = len(frac)
+    if n == 0:
+        ax.text(0.5, 0.5, "no dagger_eval_filtered data yet",
+                transform=ax.transAxes, ha="center", va="center",
+                fontsize=9, color="grey")
+        ax.set_title("Filter Reliance Across DAGGER", fontsize=9)
+        return
+
+    it = np.arange(1, n + 1)
+    ax.plot(it, frac * 100, "o-", color=C_DANGER, lw=2.2, ms=6,
+            label="filter intervention rate (% of steps)", zorder=3)
+    if len(fb) == n and np.any(fb > 0):
+        ax.plot(it, fb * 100, "s--", color="#c0392b", lw=1.3, ms=4,
+                label="fallback rate (CBF infeasible, %)")
+    ax.axhline(0, color=C_SAFE, lw=1.2, ls="--", alpha=0.8)
+    ax.set_ylim(bottom=-0.3)
+    ax.set_xticks(it)
+    ax.set_xlabel("DAgger iteration")
+    ax.set_ylabel("Filter usage on NN policy (% of steps)", color=C_DANGER)
+    ax.tick_params(axis="y", labelcolor=C_DANGER)
+
+    ax2 = ax.twinx()
+    if len(ukoz) == n:
+        ax2.bar(it, ukoz, 0.45, color="#95a5a6", alpha=0.45, zorder=1,
+                label="unfiltered koz violations / ep")
+    ax2.set_ylabel("Unfiltered KOZ violations", color="#7f8c8d", fontsize=8)
+    ax2.tick_params(axis="y", labelcolor="#7f8c8d", labelsize=7)
+    ax2.spines["top"].set_visible(False)
+
+    ax.set_title("Filter Reliance Across DAGGER — policy needs the filter less",
+                 fontsize=9, fontweight="bold")
+    l1, lb1 = ax.get_legend_handles_labels()
+    l2, lb2 = ax2.get_legend_handles_labels()
+    ax.legend(l1 + l2, lb1 + lb2, fontsize=7, loc="upper right")
+    ax.set_zorder(ax2.get_zorder() + 1)
+    ax.patch.set_visible(False)
+
+
 def draw_dynamics_val(ax, d):
     val_s = d["val_s"]
     val_loss = d["val_loss"]
@@ -351,12 +533,6 @@ def draw_phase_comparison(fig, d, hp):
     cx_tr = d["tr_steps"] + rand_steps             # shift training steps right
     cy_tr = d["tr_margin"]
 
-    cx_H = d["sf_steps"] + rand_steps
-    cy_H = d["sf_H"]
-
-    cx_du = d["sf_steps4"] + rand_steps
-    cy_du = d["sf_du"]
-
     cx_filt = d["sf_steps3"][d["sf_active"] > 0.5] + \
         rand_steps   # filter-active steps
 
@@ -390,7 +566,7 @@ def draw_phase_comparison(fig, d, hp):
         BANDS.append((bx, end, dag_colours[i % len(dag_colours)],
                       f"DAgger\niter {i+1}"))
 
-    # ── create subplots ───────────────────────────────────────────────────────
+    # ── create subplots: θ-margin timeline + reward strip ────────────────────
     gs = gridspec.GridSpecFromSubplotSpec(
         2, 1, subplot_spec=fig.add_gridspec(1, 1)[0],
         height_ratios=[3, 1], hspace=0.08)
@@ -468,39 +644,38 @@ def draw_phase_comparison(fig, d, hp):
         fontsize=11, fontweight="bold")
     ax_top.set_xlim(0, total_x)
 
-    # ── bottom: CBF H(x) + filter correction magnitude ───────────────────────
-    if len(cx_H) > 0:
-        ds_Hs, ds_H_ = downsample(cx_H, cy_H)
-        ax_bot.fill_between(ds_Hs, smooth(ds_H_, 80), alpha=0.25, color=C_SAFE)
-        ax_bot.plot(ds_Hs, smooth(ds_H_, 80), color=C_SAFE, lw=1.5,
-                    label="H(x)  CBF barrier")
-    ax_bot.axhline(0, color=C_DANGER, lw=1, ls="--", alpha=0.7)
+    # ── bottom: eval rewards over the same timeline ──────────────────────────
+    # Expert eval reward (env-step axis → combined coords).
+    if len(d["ev_rew_s"]) > 0:
+        ax_bot.plot(d["ev_rew_s"] + rand_steps, d["ev_rew"], "s-",
+                    color=C_EVAL_EXPERT, lw=1.5, ms=4,
+                    label="Eval env (hnet MPC)")
+    # Post-DAgger NN-policy eval rewards — one point per DAgger iteration,
+    # pinned to the DAgger event positions on the combined axis.
+    dag_xs = b_dag_starts[:len(d["dv_f_rew"])]
+    if len(dag_xs) > 0:
+        ax_bot.plot(dag_xs, d["dv_f_rew"][:len(dag_xs)], "^-",
+                    color=C_NN, lw=1.3, ms=5,
+                    label="NN policy (filter ON)")
+    dag_xs_u = b_dag_starts[:len(d["dv_u_rew"])]
+    if len(dag_xs_u) > 0:
+        ax_bot.plot(dag_xs_u, d["dv_u_rew"][:len(dag_xs_u)], "v--",
+                    color=C_NN, lw=1.1, ms=5, alpha=0.55,
+                    label="NN policy (filter OFF)")
+    ax_bot.axhline(0, color="#888", lw=0.8, ls=":", alpha=0.7)
 
-    ax_bot2 = ax_bot.twinx()
-    if len(cx_du) > 0:
-        ds_dus, ds_du_ = downsample(cx_du, cy_du)
-        ax_bot2.plot(ds_dus, smooth(ds_du_, 80), color=C_FILTER, lw=1.3, alpha=0.85,
-                     label="‖Δu‖  correction")
-    ax_bot2.set_ylabel("‖Δu‖", color=C_FILTER, fontsize=8)
-    ax_bot2.tick_params(axis="y", labelcolor=C_FILTER, labelsize=7)
-    ax_bot2.spines["top"].set_visible(False)
-
-    # repeat phase backgrounds on bottom panel
+    # repeat phase backgrounds + DAgger markers on the reward strip
     for (x0, x1, bg, _) in BANDS:
         ax_bot.axvspan(x0, x1, color=bg, alpha=1.0, zorder=0)
-    ax_bot.axvline(b_rand_end, color="#555", lw=2, alpha=0.5, zorder=6)
     for bx in b_dag_starts:
-        ax_bot.axvline(bx, color="#2c7a4b", lw=1.2,
-                       ls=":", alpha=0.7, zorder=5)
+        ax_bot.axvline(bx, color="#2c7a4b", lw=1.2, ls=":", alpha=0.7, zorder=5)
 
+    ax_bot.set_ylabel("Episode reward", fontsize=8)
+    ax_bot.tick_params(labelsize=7)
+    ax_bot.legend(fontsize=7, loc="lower right", ncol=3)
+    ax_bot.set_xlim(0, total_x)
     ax_bot.set_xlabel("Combined training step  (random phase → MPC + filter → DAgger)",
                       fontsize=9)
-    ax_bot.set_ylabel("H(x)", color=C_SAFE, fontsize=8)
-    ax_bot.tick_params(axis="y", labelcolor=C_SAFE, labelsize=7)
-    ax_bot.set_xlim(0, total_x)
-    l1, lb1 = ax_bot.get_legend_handles_labels()
-    l2, lb2 = ax_bot2.get_legend_handles_labels()
-    ax_bot.legend(l1 + l2, lb1 + lb2, fontsize=7, loc="upper right")
 
     # ── x-axis tick labels: show actual phase names ───────────────────────────
     tick_xs = [0, b_rand_end, b_bc_start] + b_dag_starts
@@ -546,13 +721,13 @@ def draw_filter_du(ax, d):
 # ── overview figure ────────────────────────────────────────────────────────────
 
 def plot_overview(d, run_name, footer):
-    fig = plt.figure(figsize=(18, 16))
+    fig = plt.figure(figsize=(18, 19))
     fig.patch.set_facecolor("white")
     fig.suptitle(f"CBF-CLF Safety Filter Training  |  {run_name}",
                  fontsize=13, fontweight="bold", y=0.995)
 
-    outer = gridspec.GridSpec(4, 1, figure=fig,
-                              height_ratios=[1.8, 1, 1, 1], hspace=0.50)
+    outer = gridspec.GridSpec(6, 1, figure=fig,
+                              height_ratios=[1.8, 1.1, 1, 1, 1, 1], hspace=0.50)
 
     # Row 0 — safety timeline (broken x-axis)
     n_rand = max(len(d["rand_steps"]), 1)
@@ -564,24 +739,33 @@ def plot_overview(d, run_name, footer):
     ax_train = fig.add_subplot(top_gs[1], sharey=ax_rand)
     draw_safety_timeline(ax_rand, ax_train, d)
 
-    # Row 1 — episode stats | CBF barrier
+    # Row 1 — filter activation breakdown (headline safety chart), full width
+    draw_filter_activation(fig.add_subplot(outer[1]), d)
+
+    # Row 2 — episode stats | CBF barrier
     mid_gs = gridspec.GridSpecFromSubplotSpec(
-        1, 2, subplot_spec=outer[1], wspace=0.35)
+        1, 2, subplot_spec=outer[2], wspace=0.35)
     draw_episode_stats(fig.add_subplot(mid_gs[0]), d)
     draw_cbf_barrier(fig.add_subplot(mid_gs[1]), d)
 
-    # Row 2 — policy losses | rewards
+    # Row 3 — policy losses | rewards
     bot_gs = gridspec.GridSpecFromSubplotSpec(
-        1, 2, subplot_spec=outer[2], wspace=0.35)
+        1, 2, subplot_spec=outer[3], wspace=0.35)
     draw_policy_losses(fig.add_subplot(bot_gs[0]), d)
     draw_rewards(fig.add_subplot(bot_gs[1]), d)
 
-    # Row 3 — DAgger curriculum | filter correction + val loss
+    # Row 4 — DAgger curriculum | filter correction + val loss
     dag_gs = gridspec.GridSpecFromSubplotSpec(
-        1, 3, subplot_spec=outer[3], wspace=0.38)
+        1, 3, subplot_spec=outer[4], wspace=0.38)
     draw_dagger_curriculum(fig.add_subplot(dag_gs[0]), d)
     draw_filter_du(fig.add_subplot(dag_gs[1]), d)
     draw_dynamics_val(fig.add_subplot(dag_gs[2]), d)
+
+    # Row 5 — post-DAGGER validation | filter reliance (headline result)
+    val_gs = gridspec.GridSpecFromSubplotSpec(
+        1, 2, subplot_spec=outer[5], wspace=0.40)
+    draw_dagger_validation(fig.add_subplot(val_gs[0]), d)
+    draw_filter_reliance(fig.add_subplot(val_gs[1]), d)
 
     fig.text(0.5, 0.002, footer, ha="center",
              va="bottom", fontsize=9, color="grey")
@@ -601,6 +785,9 @@ CHARTS = [
     ("07_filter_correction", draw_filter_du,         (7, 5),   False, False),
     ("08_dynamics_val",      draw_dynamics_val,      (7, 5),   False, False),
     ("09_phase_comparison",  None,                   (16, 8),  False, True),
+    ("10_dagger_validation", draw_dagger_validation, (10, 5),  False, False),
+    ("11_filter_activation", draw_filter_activation, (12, 5),  False, False),
+    ("12_filter_reliance",   draw_filter_reliance,   (10, 5),  False, False),
 ]
 
 
@@ -695,6 +882,12 @@ def load_all(ea, T):
     d["sf_steps3"], d["sf_active"] = load(ea, f"safety/{T}/filter_active")
     d["sf_steps4"], d["sf_du"] = load(ea, f"safety/{T}/filter_du_norm")
     d["sf_steps5"], d["sf_V"] = load(ea, f"safety/{T}/clf_V")
+    # Per-step activation type (SafetyFilter.TYPE_*): 0 inactive, 1 corrected,
+    # 2 soft-CBF fallback, 3 QP failure.  Missing in runs before baseline_21.
+    d["sf_steps6"], d["sf_type"] = load(ea, f"safety/{T}/filter_type")
+    d["tr_ep_corr_s"], d["tr_ep_corr"] = load(ea, f"train_env/{T}/filter_corrected")
+    d["tr_ep_fb_s"],   d["tr_ep_fb"] = load(ea, f"train_env/{T}/filter_fallback")
+    d["tr_ep_fail_s"], d["tr_ep_fail"] = load(ea, f"train_env/{T}/filter_failed")
 
     d["pol_s"],   d["pol_imit"] = load(ea, "policy/loss_imit")
     d["pol_s2"],  d["pol_cbf"] = load(ea, "policy/loss_cbf")
@@ -702,9 +895,20 @@ def load_all(ea, T):
     d["pol_s4"],  d["pol_cbf_vf"] = load(ea, "policy/cbf_viol_frac")
     d["pol_s5"],  d["pol_cbf_mm"] = load(ea, "policy/cbf_mean_margin")
     d["pol_s6"],  d["pol_clf_vf"] = load(ea, "policy/clf_viol_frac")
-    d["pol_dag_s"],      d["pol_kappa"] = load(ea, "policy/kappa")
-    d["pol_dag_lcbf_s"], d["pol_lcbf"] = load(ea, "policy/lambda_cbf")
-    d["pol_dag_lclf_s"], d["pol_lclf"] = load(ea, "policy/lambda_clf")
+    # Curriculum scalars moved from policy/* to dagger/* in baseline_21;
+    # fall back to the old tags so dashboards for older runs still render.
+    d["pol_dag_s"],      d["pol_kappa"] = load(ea, "dagger/kappa")
+    if len(d["pol_dag_s"]) == 0:
+        d["pol_dag_s"],  d["pol_kappa"] = load(ea, "policy/kappa")
+    d["pol_dag_lcbf_s"], d["pol_lcbf"] = load(ea, "dagger/lambda_cbf")
+    if len(d["pol_dag_lcbf_s"]) == 0:
+        d["pol_dag_lcbf_s"], d["pol_lcbf"] = load(ea, "policy/lambda_cbf")
+    d["pol_dag_lclf_s"], d["pol_lclf"] = load(ea, "dagger/lambda_clf")
+    if len(d["pol_dag_lclf_s"]) == 0:
+        d["pol_dag_lclf_s"], d["pol_lclf"] = load(ea, "policy/lambda_clf")
+    # KOZ hits during the unfiltered DAGGER rollouts (baseline_22+): nonzero
+    # early = the buffer is receiving near-KOZ avoidance labels; → 0 = learned.
+    d["dag_rkoz_s"], d["dag_rkoz"] = load(ea, "dagger/rollout_koz")
 
     d["ev_rew_s"],  d["ev_rew"] = load(ea, f"eval_env/{T}/reward")
     d["pev_rew_s"], d["pev_rew"] = load(ea, f"policy_eval/{T}/reward")
@@ -713,6 +917,24 @@ def load_all(ea, T):
     d["ev_att_s"],  d["ev_att"] = load(ea, f"eval_env/{T}/att_err_final_deg")
 
     d["val_s"],  d["val_loss"] = load(ea, f"val/{T}/loss")
+
+    # Post-DAGGER validation: same NN policy, with vs. without the safety
+    # filter, logged at the same policy step so the two line up 1:1 with
+    # dagger/iter (see hnet_exp._eval_nn_policy call sites after dagger_update).
+    d["dv_f_s"],   d["dv_f_koz"] = load(ea, f"dagger_eval_filtered/{T}/koz_violations")
+    _,             d["dv_f_rew"] = load(ea, f"dagger_eval_filtered/{T}/reward")
+    _,             d["dv_f_margin"] = load(ea, f"dagger_eval_filtered/{T}/min_theta_margin_deg")
+    # Filter reliance of the NN policy (headline DAGGER result): fraction of
+    # eval steps where the QP had to correct the action, and how hard.
+    _,             d["dv_f_filtfrac"] = load(ea, f"dagger_eval_filtered/{T}/filter_fraction")
+    _,             d["dv_f_fbfrac"]   = load(ea, f"dagger_eval_filtered/{T}/filter_fallback_frac")
+    _,             d["dv_f_du"]       = load(ea, f"dagger_eval_filtered/{T}/filter_du_mean")
+
+    d["dv_u_s"],   d["dv_u_koz"] = load(ea, f"dagger_eval_unfiltered/{T}/koz_violations")
+    _,             d["dv_u_rew"] = load(ea, f"dagger_eval_unfiltered/{T}/reward")
+    _,             d["dv_u_margin"] = load(ea, f"dagger_eval_unfiltered/{T}/min_theta_margin_deg")
+
+    d["dag_iter_s"], d["dag_iter"] = load(ea, "dagger/iter")
 
     return d
 
@@ -728,9 +950,21 @@ def build_footer(d):
         mf = f"{(d['tr_ep_filt'][:n] / np.maximum(d['ep_lens'][:n], 1)).mean()*100:.1f}%"
     else:
         mf = "?"
+    if len(d["dv_u_koz"]) > 0:
+        dv = (f"  |  Post-DAGGER unfiltered violations: "
+              f"{d['dv_u_koz'].sum():.0f} total over {len(d['dv_u_koz'])} checks "
+              f"(worst min margin {d['dv_u_margin'].min():.2f}deg)")
+    else:
+        dv = ""
+    if len(d["sf_type"]) > 0:
+        t = np.round(d["sf_type"]).astype(int)
+        ft = (f"  |  Filter fallback: {(t == 2).sum()} steps, "
+              f"QP failures: {(t == 3).sum()} steps")
+    else:
+        ft = ""
     return (f"Random phase: {n_rand} KOZ violations  |  "
             f"Training: {n_train} KOZ violations (filter active)  |  "
-            f"Avg filter fraction: {mf}")
+            f"Avg filter fraction: {mf}{ft}{dv}")
 
 
 # ── entry point ────────────────────────────────────────────────────────────────

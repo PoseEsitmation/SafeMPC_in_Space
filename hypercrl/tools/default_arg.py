@@ -113,14 +113,50 @@ def default_arg_policy(hparams):
     hparams.policy_bs = 128
     hparams.policy_train_iters = 1000   # training iterations per dynamics update
     hparams.policy_lambda_imit = 1.0    # weight on imitation (BC) loss
-    hparams.policy_lambda_cbf = 0.0    # weight on CBF penalty loss (Eq. 16)
-    hparams.policy_lambda_clf = 0.0    # weight on CLF penalty loss (Eq. 17)
+    hparams.policy_lambda_cbf = 2.0    # weight on CBF penalty loss (Eq. 16)
+    hparams.policy_lambda_clf = 2.0    # weight on CLF penalty loss (Eq. 17)
+    # multiplier applied to lambda_cbf/clf each DAGGER iter
+    hparams.policy_lambda_ramp = 2.0
+    hparams.policy_lambda_max = 1.0    # curriculum cap for lambda_cbf/clf
     # set True in env configs that have CBF/CLF
     hparams.policy_use_safety_loss = False
     hparams.policy_train_start = 0      # MPC steps before policy training begins
     hparams.dagger_every = 0      # run DAGGER every N MPC steps (0 = disabled)
     hparams.dagger_n_iter = 5      # number of DAGGER refinement iterations total
     hparams.dagger_n_rollout = 5      # rollout episodes per DAGGER iteration
+    # Execute raw mixed actions during DAGGER rollouts (False, the default).
+    # True filters them through the safety filter, which keeps rollouts away
+    # from exactly the states where the raw policy fails, so the buffer never
+    # contains avoidance labels — see PolicyTrainer.dagger_update.
+    hparams.dagger_filter_rollouts = False
+    # Post-DAGGER validation episodes (per DAGGER iteration, hnet_exp).  The
+    # per-episode metrics are high-variance (init attitude error 80–180°,
+    # random KOZ placement/size per reset), so 3 episodes made the
+    # dagger_eval_* curves jump around.  Unfiltered episodes are nearly free
+    # (~0.1 s: raw env + policy forward) and carry the key safety signal →
+    # many.  Filtered episodes solve the QP every step (~6 s/episode
+    # measured) → fewer.
+    hparams.dagger_val_eps_unfiltered = 20
+    hparams.dagger_val_eps_filtered = 10
+    # Safety-prioritised sampling for policy training: rows where the expert's
+    # filter corrected the label, and rows within policy_safety_margin_deg of
+    # the KOZ boundary, are drawn up to policy_safety_oversample x more often
+    # (WeightedRandomSampler).  1.0 = uniform sampling (off).
+    hparams.policy_safety_oversample = 1.0
+    hparams.policy_safety_margin_deg = 15.0
+    # CBF hinge margin during policy training (0 = penalise only outright
+    # violation).  Positive values create gradient in the approach corridor
+    # and give the learned condition robustness headroom.
+    hparams.policy_cbf_eps_train = 0.0
+    # Fraction of DAGGER rollout episodes run with the pure NN policy (κ=0)
+    # so the buffer contains the learner's own failure states (0 = all
+    # episodes follow the κ curriculum).
+    hparams.dagger_student_frac = 0.0
+    # Closed-form CBF safety layer inside the policy network (env configs
+    # with a CBF turn this on).  policy_head_eps is the condition margin the
+    # layer enforces (slightly above the QP filter's runtime ε).
+    hparams.policy_safety_head = False
+    hparams.policy_head_eps = 0.03
     return hparams
 
 
@@ -1050,11 +1086,23 @@ def default_arg_sat(hparams):
 
     # Tasks
     hparams.num_tasks = 4
-    hparams.init_rand_steps = 5000       # was 1000 — more random data before MPC
-    hparams.max_iteration = 50000
+    # 5000 random steps before MPC — matches the confirmed-good pure-MBRL run
+    # (20260618_115015) and stabilises the x/u/diff normalisation statistics
+    # before anything downstream consumes them.
+    hparams.init_rand_steps = 5000
+    # 20000 (was 30000 in baseline_20): shortened for faster validation
+    # iterations.  The post-policy_train_start phase shrinks from 20000 to
+    # 10000 steps; dagger_every drops to 1000 below so all 10 DAGGER
+    # curriculum sessions still complete before the run ends.
+    hparams.max_iteration = 20000
     hparams.dynamics_update_every = 500
-    # skip policy training until MPC has 2 updates of data
-    hparams.policy_train_start = 5000
+    # The MPC expert needs several episodes of model learning before its
+    # rollouts reach the goal (confirmed run: competent from ~ep 6).  Starting
+    # imitation earlier trains the policy on garbage labels — baseline_16/17
+    # started at 2000 and the expert still violated the KOZ at its step-5000
+    # eval.  BC starts here; DAGGER starts at the first dagger_every multiple
+    # after this.
+    hparams.policy_train_start = 10000
 
     # Common Dynamics Model
     hparams.dnn_out = "diff"
@@ -1064,6 +1112,15 @@ def default_arg_sat(hparams):
     # diff target the model ignores omega entirely (R^2 < 0) and the planner
     # has no usable action->state signal. See datautil.normalize_diff.
     hparams.normalize_diff = True
+    # Freeze x/diff normalisation stats at the end of task 0's random phase
+    # (actions use the identity transform — the box is already [-1,1]³).  One
+    # fixed coordinate system for the whole run: normalised DAGGER buffers and
+    # CBF/CLF closures can't go stale, and the hnet trains on a stationary
+    # input distribution shared across tasks (task differences must then be
+    # expressed through the task embedding, not through per-task norms).
+    # Stats are saved as norms.pt in the run dir; reuse them in another run
+    # with --norms-path to get identical coordinates across runs.
+    hparams.freeze_norms = True
     hparams.h_dims = [256, 256]
     hparams.out_var = False
 
@@ -1091,18 +1148,48 @@ def default_arg_sat(hparams):
     hparams.n_sim_steps = 5
     hparams.n_sim_particles = 500
     hparams.num_cem_elites = 50
+    # Clip CEM samples to the physical actuator box [-1, 1]³ so the planner
+    # only considers executable torques (see MPC.__init__).
+    hparams.mpc_u_bound = 1.0
 
     # PDDM
     hparams.pddm_beta = 0.7
     hparams.pddm_kappa = 20
     hparams.mag_noise = 1.0
-    hparams.policy_use_safety_loss = False
-    # activate CBF loss (theta_margin in obs[7])
-    hparams.policy_lambda_cbf = 1e-4
-    # activate CLF loss (attitude error penalty)
-    hparams.policy_lambda_clf = 1e-5
-    hparams.dagger_every = 5000   # run DAGGER every 5000 MPC steps
-    hparams.dagger_n_iter = 5      # total DAGGER iterations across the run
+    hparams.policy_use_safety_loss = True
+    # CBF/CLF curriculum (paper Sec. IV-A: weights "designed to yield losses
+    # of similar order of magnitude").  Measured on safe expert states:
+    # loss_imit ≈ 2-3, loss_cbf ≈ 1e-3, loss_clf ≈ 5e-4 — matching imitation
+    # at full curriculum strength therefore needs λ ≈ O(10³).  baseline_21
+    # (cap 100 → peak CBF contribution ≈ 0.1) left cbf_viol_frac pinned at
+    # 20-40% and unfiltered validation KOZ violations flat across all 10
+    # DAGGER iterations.  Cap 500 puts safe-state batches just below
+    # imitation while letting batches that contain actual near-KOZ states
+    # (which unfiltered DAGGER rollouts now supply, with per-sample hinges
+    # orders larger) dominate the gradient — by design: safety first.
+    hparams.policy_lambda_cbf = 1.0
+    hparams.policy_lambda_clf = 0.05
+    hparams.policy_lambda_ramp = 3.0   # ×3 per DAGGER iter → CBF cap at iter ~6
+    hparams.policy_lambda_max = 500.0
+    hparams.dagger_every = 500    # DAGGER at steps 10000, 10500, ..., 19500
+    hparams.dagger_n_iter = 20     # κ anneals 0.95 → 0.0 across the 20 iters
     hparams.dagger_n_rollout = 5      # rollout episodes per DAGGER iteration
+    # Oversample safety-critical rows ~10x: expert-filter-corrected labels
+    # (buffer tags) and states within 15° of the KOZ (θ-margin, all rows) —
+    # they are ~a few % of the data but carry all the avoidance knowledge.
+    hparams.policy_safety_oversample = 10.0
+    # baseline_33 (loss_cbf == 0.0000 all run, unfiltered KOZ violations flat
+    # across 20 DAGGER iters): the CBF penalty needs states it can fire on
+    # and a margin to fire early.  ε_train = 0.05 ≈ p(≈30%) of the observed
+    # condition-margin distribution (mean 0.17); the boundary sampler (set in
+    # hnet_exp) supplies synthetic corridor states; student rollouts harvest
+    # the policy's real failure states with expert labels.
+    hparams.policy_cbf_eps_train = 0.05
+    hparams.dagger_student_frac = 0.4   # 2 of 5 rollout episodes pure NN
+    # Closed-form CBF layer inside the policy (baseline_34: learning alone
+    # left unfiltered eval unsafe — the layer makes the network satisfy the
+    # barrier by construction wherever control-feasible; the MLP underneath
+    # keeps learning via DAGGER, tracked by head_du_mean → 0).
+    hparams.policy_safety_head = True
 
     return hparams

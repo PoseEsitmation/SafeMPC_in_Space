@@ -94,6 +94,19 @@ class MPC(Agent):
         if self.model_name.startswith("hnet") or self.model_name == "chunked_hnet":
             self.reset_hnet()
 
+        # Bound CEM samples to the actuator box (hparams.mpc_u_bound, physical
+        # action units).  Unbounded, the elite-refit mean drifts far outside
+        # the feasible set (proposals up to ~16 observed in baseline_20 with
+        # bounds ±1): the planner "plans" with impossible torques that the
+        # safety-filter box constraint then silently clips — inflating filter
+        # activation to ~40% of steps regardless of distance to the KOZ, and
+        # producing extreme outlier expert labels for imitation.
+        _u_bound = getattr(hparams, "mpc_u_bound", None)
+        _u_max_t = (
+           torch.ones(hparams.control_dim) * float(_u_bound)
+            if _u_bound is not None else None
+         )
+
         if hparams.control == "mpc-cem":
             self.control = CEM(
                 self._dynamics, self._cost, hparams.state_dim, hparams.control_dim,
@@ -103,7 +116,7 @@ class MPC(Agent):
                 horizon=hparams.horizon,
                 device=hparams.device,
                 u_min=None,
-                u_max=None,
+                u_max=_u_max_t,
                 choose_best=True,
                 init_cov_diag=hparams.mag_noise,
             )
@@ -158,7 +171,8 @@ class MPC(Agent):
         if self.normalize_diff and self.collector is not None \
                 and task_id in getattr(self.collector, "diff_norms", {}):
             dx_mu, dx_std = self.collector.norm_diff(task_id)
-            self.dx_mu, self.dx_std = dx_mu.to(self.device), dx_std.to(self.device)
+            self.dx_mu, self.dx_std = dx_mu.to(
+                self.device), dx_std.to(self.device)
 
     def _dynamics(self, x: torch.Tensor, u: torch.Tensor,
                   task_id: Optional[int]) -> torch.Tensor:
@@ -425,9 +439,11 @@ class NNPolicyAgent(Agent):
         task_id: Optional[int] = None,      # unused — policy is task-agnostic
         first_action: bool = True,           # unused — no receding-horizon planning
     ) -> torch.Tensor:
-        state_np = state.detach().cpu().numpy() if isinstance(state, torch.Tensor) else np.asarray(state)
+        state_np = state.detach().cpu().numpy() if isinstance(
+            state, torch.Tensor) else np.asarray(state)
 
-        x = torch.tensor(state_np, dtype=torch.float32, device=self.device).unsqueeze(0)
+        x = torch.tensor(state_np, dtype=torch.float32,
+                         device=self.device).unsqueeze(0)
 
         # 1. env-specific preprocessing (cos/sin of angles, drop x_pos, …)
         x = _preprocess_state_torch(x, self.env_name)
@@ -439,15 +455,20 @@ class NNPolicyAgent(Agent):
         # 3. policy forward pass
         self.policy.eval()
         with torch.no_grad():
-            u = self.policy(x).squeeze(0)   # shape (action_dim,), in normalised space
+            # (action_dim,), normalised space, unbounded linear
+            u = self.policy(x).squeeze(0)
 
-        # 4. denormalise action back to physical space
+        # 4. denormalise action back to physical space and clip to env bounds.
+        # Without the clip, an unbounded linear policy head can produce extreme
+        # values that destabilise the QP solver in step 5.
         if self.normalize_xu and self.a_mu is not None:
             u = u * self.a_std + self.a_mu
+        u = torch.clamp(u, -1.0, 1.0)
 
         # 5. apply safety filter (QP projection)
         if self.safety_filter is not None:
-            u_safe = self.safety_filter.filter(state_np.flatten(), u.cpu().numpy())
+            u_safe = self.safety_filter.filter(
+                state_np.flatten(), u.cpu().numpy())
             u = torch.from_numpy(u_safe).to(u)
 
         return u

@@ -42,6 +42,14 @@ from hypercrl.control.safety_filter import CBF, CLF
 
 _PI = math.pi
 
+# sin θ below this ⇒ within ~3° of a pole (θ≈0: deep inside the KOZ; θ≈π:
+# pointing directly away — the safest attitude).  The ḧ terms divide by sin θ
+# with numerators ~|ω|² that do NOT vanish at the poles, so a tighter guard
+# (the old 1e-6) let the quotient explode as |ω|²/sinθ.  Zeroing the rate
+# terms there is exact in the θ→π limit and conservative for θ→0 (γH keeps
+# the penalty/constraint active via h < 0).
+_SIN_GUARD = 0.05
+
 # Physical constants from space_KOZ.py
 _SCALE_TORQUE = 2.0        # [Nm] max torque per axis
 _SCALE_OMEGA  = 5.0        # [rad/s] obs normalisation factor
@@ -111,7 +119,7 @@ class SpaceAttitudeCBF(CBF):
         c_perp = np.cross(_BORESIGHT_B, av_b)          # |c_perp| = sin θ
 
         # ḣ = −ω · c_perp / sin(θ)
-        if sin_t > 1e-6:
+        if sin_t > _SIN_GUARD:
             h_dot = -float(np.dot(omega, c_perp)) / sin_t
         else:
             h_dot = 0.0
@@ -121,16 +129,20 @@ class SpaceAttitudeCBF(CBF):
     def _h_dot_dot_f(self, omega, c_perp, sin_t, theta, h_dot, av_b) -> float:
         """Nonlinear (drift) part of ḧ — no u dependence.
 
-        ḧ = −(ω_dot_f·c_perp + ω·dc_perp_dt) / sin θ + h_dot·cos θ·h_dot / sin²θ
+        ḧ = −(ω_dot_f·c_perp + ω·dc_perp_dt) / sin θ − ḣ²·cos θ / sin θ
         where ω_dot_f = I⁻¹(−ω×Iω)  and  dc_perp_dt = b × (−ω×a)
+
+        Derivation: ḣ = −N/S where N=ω·c_perp, S=sinθ
+          ḧ = −(Ṅ·S − N·Ṡ)/S² = −Ṅ/S + (N/S)·(cosθ·θ̇)/S
+            = −Ṅ/S + (−ḣ)·cosθ·ḣ / S = −Ṅ/S − ḣ²·cosθ / sinθ
         """
         omega_dot_f = self._I_inv @ (-np.cross(omega, self._I @ omega))
         # dc_perp/dt = boresight × d(avoid_in_b)/dt = boresight × (−ω × avoid_in_b)
         dc_perp_dt = np.cross(_BORESIGHT_B, -np.cross(omega, av_b))
 
-        if sin_t > 1e-6:
+        if sin_t > _SIN_GUARD:
             drift = -(np.dot(omega_dot_f, c_perp) + np.dot(omega, dc_perp_dt)) / sin_t
-            drift += h_dot * math.cos(theta) * h_dot / (sin_t ** 2)
+            drift -= h_dot * math.cos(theta) * h_dot / sin_t
         else:
             drift = 0.0
         return drift
@@ -154,7 +166,7 @@ class SpaceAttitudeCBF(CBF):
         H_val  = th_marg + abs(h_dot) * h_dot / (2.0 * _U_MAX)
 
         # Linear-in-u part of ḧ: −(I⁻¹·c_perp)·tau/sin θ,  tau = u·scale_torque
-        if sin_t > 1e-6:
+        if sin_t > _SIN_GUARD:
             g_h_dot_dot = -(self._I_inv @ c_perp) * _SCALE_TORQUE / sin_t
         else:
             g_h_dot_dot = np.zeros(3)
@@ -193,8 +205,8 @@ class SpaceAttitudeCLF(CLF):
         c_w: float = 0.1,      # weight on angular rate
         zeta_min: float = 0.001,
         zeta_max: float = 0.06,
-        j: float = 1.0,        # sigmoid steepness (paper: j=1)
-        c: float = 2.0,        # sigmoid midpoint in radians
+        j: float = 5.0,        # sigmoid steepness (in 1/rad of attitude error)
+        c: float = 0.6,        # sigmoid midpoint [rad] ≈ 34° attitude error
     ) -> None:
         self._env     = env
         self.c_q      = c_q
