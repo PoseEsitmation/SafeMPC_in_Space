@@ -225,6 +225,8 @@ The filter minimises deviation from `u_proposed` subject to:
 On solver failure it falls back to `u_proposed` and logs a warning.
 The filter is geometry-agnostic — the env owns the CBF/CLF objects.
 
+## Test
+python -m pytest -s tests/test_cbf_clf_filter.py -v
 
 ## References
 
