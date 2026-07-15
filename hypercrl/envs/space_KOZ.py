@@ -32,6 +32,11 @@ time_per_episode = 100    # [s]
 angle_bound_lower = 80
 angle_bound_upper = 180
 
+# KOZ half-angle sampling bounds [deg] (upper is additionally capped by the
+# geometry-dependent half_angle_max computed at reset)
+half_angle_low_deg = 15.0
+half_angle_high_deg = 30.0
+
 # KOZ placement parameters (exponential-map method)
 vector_rotation_angle1_ratio_low  = 0.5
 vector_rotation_angle1_ratio_high = 0.5
@@ -238,9 +243,12 @@ class SatDynEnv(gym.Env):
         if half_angle_max == 0.0:
             half_angle = 0.0
         else:
-            half_angle_max = np.minimum(half_angle_max, 30.0)
-            # sample KOZ size in [15°, min(half_angle_max, 30°)]; raise lower bound = harder task
-            half_angle = np.random.uniform(15.0, half_angle_max) * deg2rad
+            half_angle_max = np.minimum(half_angle_max, half_angle_high_deg)
+            # sample KOZ size in [low, min(half_angle_max, high)] (module
+            # globals; a fixed-scenario run pins low == high).  Raising the
+            # lower bound = harder task.
+            lo = np.minimum(half_angle_low_deg, half_angle_max)
+            half_angle = np.random.uniform(lo, half_angle_max) * deg2rad
 
         self.f_zone = KeepOutZone(boresight_b, avoid_vec_i, half_angle)
 

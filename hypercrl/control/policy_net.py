@@ -68,24 +68,8 @@ class PolicyNet(nn.Module):
 
         self.net = nn.Sequential(*layers)
 
-        # Optional closed-form CBF safety layer (make_space_cbf_safety_head):
-        # applied inside forward(), so training losses, DAGGER rollouts and
-        # ALL evals (including "unfiltered") see the corrected action — the
-        # network itself is safe wherever the constraint is control-feasible,
-        # with no QP solver at inference.  last_head_du tracks how much the
-        # layer had to correct (the internalisation metric: → 0 as the MLP
-        # learns to be safe on its own).
-        self.safety_head = None
-        self.last_head_du: float = 0.0
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        u = self.net(x)
-        if self.safety_head is not None:
-            u_safe = self.safety_head(x, u)
-            with torch.no_grad():
-                self.last_head_du = float((u_safe - u).norm(dim=1).mean())
-            u = u_safe
-        return u
+        return self.net(x)
 
 
 # ---------------------------------------------------------------------------
@@ -649,8 +633,11 @@ class PolicyTrainer:
             writer.add_scalar("dagger/nn_vs_expert_mean",      nn_vs_expert_mean,    self._step)
             writer.add_scalar("dagger/nn_vs_expert_max",       nn_vs_expert_max,     self._step)
             writer.add_scalar("dagger/bc_loss_after_training", bc_loss,              self._step)
-            writer.add_scalar("policy/train_set_n_dyn",        n_dyn,                self._step)
-            writer.add_scalar("policy/train_set_n_dag",        n_dag,                self._step)
+            # dagger/ namespace (policy-step axis) — the same quantities are
+            # also logged as policy/train_set_n_* from the periodic training
+            # block on the env-step axis; sharing one tag zigzagged the plot.
+            writer.add_scalar("dagger/train_set_n_dyn",        n_dyn,                self._step)
+            writer.add_scalar("dagger/train_set_n_dag",        n_dag,                self._step)
 
 
 # ---------------------------------------------------------------------------
@@ -900,52 +887,6 @@ def make_space_cbf_feasible_fn(
     return feasible_fn
 
 
-def make_space_cbf_safety_head(
-    x_mu: torch.Tensor,
-    x_std: torch.Tensor,
-    a_mu: torch.Tensor,
-    a_std: torch.Tensor,
-    inertia,
-    gamma: float = 0.5,
-    eps: float = 0.03,
-) -> Callable:
-    """Closed-form CBF safety layer: minimal-norm correction inside the policy.
-
-    The CBF condition is affine in the action, c(x,u) = c0 + b·u_raw, so the
-    QP projection onto the half-space c ≥ eps has the closed form
-
-        u' = u + max(0, eps − c(x,u)) · b / (‖b‖² + δ)
-
-    followed by a clamp to the actuator box.  Differentiable (gradients flow
-    to the underlying network through u), no solver at inference — the policy
-    stays a pure feed-forward function and is safe BY CONSTRUCTION wherever
-    the constraint is control-feasible; where it isn't (‖b‖ ≈ 0), the
-    correction fades to zero, matching the QP filter's fallback regime.
-    Inputs/outputs are in the policy's (collector-normalised) action space.
-    """
-    components = make_space_cbf_components(x_mu, x_std, inertia, gamma)
-    a_mu_f, a_std_f = a_mu.flatten(), a_std.flatten()
-
-    def safety_head(state_norm: torch.Tensor, action_norm: torch.Tensor) -> torch.Tensor:
-        dev = state_norm.device
-        a_mu_d, a_std_d = a_mu_f.to(dev), a_std_f.to(dev)
-        c0, b = components(state_norm)
-        u_raw = action_norm * a_std_d + a_mu_d                          # (B, 3)
-
-        c = c0 + (b * u_raw).sum(dim=1)                                 # (B,)
-        deficit = (eps - c).clamp(min=0.0)                              # (B,)
-        # clamp (not add) the regulariser: ‖b‖² is ~1e-7 here (2 Nm torque
-        # through 50-70 kg·m² inertia), an additive δ would shrink the step
-        # 10x.  When the needed step exceeds the box, the clamp below lands
-        # on sign(b) = maximal braking — the best action the box allows
-        # (b·u is monotone per-coordinate, so clamping never overshoots).
-        denom   = (b * b).sum(dim=1).clamp(min=1e-9)                    # (B,)
-        u_corr  = u_raw + (deficit / denom).unsqueeze(1) * b            # (B, 3)
-        u_corr  = u_corr.clamp(-1.0, 1.0)                               # actuator box
-
-        return (u_corr - a_mu_d) / a_std_d
-
-    return safety_head
 
 
 def make_space_margin_fn(x_mu: torch.Tensor, x_std: torch.Tensor) -> Callable:

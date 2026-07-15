@@ -648,94 +648,24 @@ class TestCbfEffectiveness:
         assert trainer._last_rollout_kappas == [0.0, 0.0, 0.8, 0.8, 0.8]
 
 
-class TestCbfSafetyHead:
-    """Closed-form CBF layer inside the policy: monotone condition improvement,
-    exact identity when already safe, differentiable, and feasibility masking."""
-
-    def _factories(self):
-        from hypercrl.control.policy_net import (make_space_cbf_fn,
-                                                 make_space_cbf_safety_head,
-                                                 make_space_cbf_feasible_fn,
-                                                 make_space_boundary_sampler)
-        import math
-        I = [[60, 5, 1], [5, 50, 2], [1, 2, 70]]
-        x_mu, x_std = torch.zeros(1, 13), torch.ones(1, 13)
-        a_mu, a_std = torch.zeros(1, 3), torch.ones(1, 3)
-        cbf  = make_space_cbf_fn(x_mu, x_std, a_mu, a_std, I)
-        head = make_space_cbf_safety_head(x_mu, x_std, a_mu, a_std, I, eps=0.03)
-        feas = make_space_cbf_feasible_fn(x_mu, x_std, I, eps=0.03)
-        smp  = make_space_boundary_sampler(x_mu, x_std)
-        return cbf, head, feas, smp
-
-    def _corridor_states(self, sampler, n=256, seed=0):
-        import math
-        g = torch.Generator().manual_seed(seed)
-        obs = torch.zeros(n, 13)
-        q = torch.randn(n, 4, generator=g); q = q / q.norm(dim=1, keepdim=True)
-        obs[:, 0:4] = q
-        obs[:, 4:7] = torch.randn(n, 3, generator=g) * 0.02   # ω up to ~0.35 rad/s
-        m, th = math.radians(30), math.radians(50)             # margin 30°, half 20°
-        obs[:, 7] = -1 + (m + math.pi/2) * 4 / (3*math.pi)
-        obs[:, 8] = -1 + th * 2 / math.pi
-        rel = torch.randn(n, 3, generator=g); obs[:, 9:12] = rel / rel.norm(dim=1, keepdim=True)
-        return sampler(obs)
-
-    def test_head_never_worsens_condition(self):
-        cbf, head, _, smp = self._factories()
-        x = self._corridor_states(smp)
-        u = torch.randn(x.shape[0], 3).clamp(-1, 1)
-        c_before = cbf(x, u)
-        c_after  = cbf(x, head(x, u))
-        assert (c_after >= c_before - 1e-5).all(), \
-            f"head worsened the CBF condition: {(c_after - c_before).min()}"
-
-    def test_head_reaches_eps_on_feasible_states(self):
-        cbf, head, feas, smp = self._factories()
-        x = self._corridor_states(smp)
-        u = torch.randn(x.shape[0], 3).clamp(-1, 1)
-        mask = feas(x) & (cbf(x, u) < 0.03)
-        if mask.any():
-            c_after = cbf(x[mask], head(x[mask], u[mask]))
-            assert (c_after >= 0.03 - 1e-4).all(), \
-                f"feasible violating states not corrected to eps: min={c_after.min()}"
-
-    def test_head_identity_when_safe(self):
-        cbf, head, _, smp = self._factories()
-        x = self._corridor_states(smp)
-        u = torch.zeros(x.shape[0], 3)
-        safe = cbf(x, u) >= 0.03
-        assert safe.any(), "test setup: expected some already-safe states"
-        u_out = head(x[safe], u[safe])
-        assert torch.allclose(u_out, u[safe], atol=1e-6)
-
-    def test_head_is_differentiable(self):
-        _, head, _, smp = self._factories()
-        x = self._corridor_states(smp, n=32)
-        u = torch.zeros(32, 3, requires_grad=True)
-        head(x, u).sum().backward()
-        assert u.grad is not None and torch.isfinite(u.grad).all()
+class TestCbfFeasibleFn:
+    """Control-feasibility mask for the boundary CBF penalty (kept after the
+    safety-head removal): states where no action in the box can reach the
+    margin (ḣ≈0 → b≈0) must be excluded — they carry no usable gradient."""
 
     def test_feasible_fn_masks_zero_authority_states(self):
         import math
-        _, _, feas, _ = self._factories()
+        from hypercrl.control.policy_net import make_space_cbf_feasible_fn
+        I = [[60, 5, 1], [5, 50, 2], [1, 2, 70]]
+        feas = make_space_cbf_feasible_fn(torch.zeros(1, 13), torch.ones(1, 13),
+                                          I, eps=0.03)
         obs = torch.zeros(4, 13)
         obs[:, 0] = 1.0
-        obs[:, 9] = 1.0                                   # arbitrary unit rel_avoid
+        obs[:, 9] = 1.0
         th_half = math.radians(20)
         for i, m_deg in enumerate([2.0, 2.0, 40.0, 40.0]):
             m = math.radians(m_deg)
             obs[i, 7] = -1 + (m + math.pi/2) * 4 / (3*math.pi)
             obs[i, 8] = -1 + (m + th_half) * 2 / math.pi
-        # ω = 0 → ḣ = 0 → b = 0: condition = γ·H = γ·margin
-        out = feas(obs)
-        assert out.tolist() == [False, False, True, True], (
-            f"ω=0 states: margin 2° (γH=0.017 < ε) must be infeasible, "
-            f"margin 40° (γH=0.35) feasible; got {out.tolist()}"
-        )
-
-    def test_policy_net_applies_head_and_tracks_du(self):
-        policy = PolicyNet(13, 3, hidden_dims=(16,), dropout=0.0)
-        policy.safety_head = lambda x, u: torch.zeros_like(u)
-        out = policy(torch.randn(8, 13))
-        assert torch.allclose(out, torch.zeros(8, 3))
-        assert policy.last_head_du > 0.0
+        # ω = 0 → ḣ = 0 → b = 0: condition = γ·margin (0.017 vs 0.35)
+        assert feas(obs).tolist() == [False, False, True, True]

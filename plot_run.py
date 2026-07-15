@@ -302,6 +302,10 @@ def draw_policy_losses(ax, d):
     if len(pol_s3) > 0 and pol_clf.max() > 0:
         ax.semilogy(pol_s3, np.clip(pol_clf, 1e-9, None), color=C_CLF, lw=1.5,
                     label="L_clf")
+    pol_bnd_s, pol_cbf_bnd = d.get("pol_bnd_s", []), d.get("pol_cbf_bnd", [])
+    if len(pol_bnd_s) > 0 and np.max(pol_cbf_bnd) > 0:
+        ax.semilogy(pol_bnd_s, np.clip(pol_cbf_bnd, 1e-9, None), color="#e67e22",
+                    lw=1.2, label="L_cbf boundary (synthetic)")
 
     ax2 = ax.twinx()
     if len(pol_s4) > 0:
@@ -309,6 +313,10 @@ def draw_policy_losses(ax, d):
                  label="CBF viol % (batch)")
         ax2.plot(pol_s6, pol_clf_vf * 100, color=C_CLF, lw=1, ls=":", alpha=0.8,
                  label="CLF viol % (batch)")
+    pol_svf_s, pol_synth_vf = d.get("pol_svf_s", []), d.get("pol_synth_vf", [])
+    if len(pol_svf_s) > 0:
+        ax2.plot(pol_svf_s, np.asarray(pol_synth_vf) * 100, color="#e67e22",
+                 lw=1, ls=":", alpha=0.8, label="CBF viol % (boundary, feasible)")
     ax2.set_ylabel("Batch violation (%)", fontsize=8)
     ax2.tick_params(labelsize=7)
     ax2.spines["top"].set_visible(False)
@@ -369,6 +377,10 @@ def draw_dagger_curriculum(ax, d):
     if len(pol_dag_s) > 0:
         ax.plot(pol_dag_s, pol_kappa, "o-", color="#2980b9",
                 lw=1.5, ms=5, label="κ (expert mix)")
+    dag_labelfrac = d.get("dag_labelfrac", [])
+    if len(dag_labelfrac) == len(pol_dag_s):
+        ax.plot(pol_dag_s, dag_labelfrac, "d--", color="#e67e22", lw=1.2, ms=4,
+                label="labels filter-corrected (frac)")
     ax2 = ax.twinx()
     if len(pol_dag_lcbf_s) > 0:
         ax2.plot(pol_dag_lcbf_s, pol_lcbf, "^-", color=C_CBF,
@@ -409,7 +421,11 @@ def draw_dagger_validation(ax, d):
         ax.set_title("Post-DAGGER Validation (filter on/off)", fontsize=9)
         return
 
-    it = np.arange(1, n + 1)
+    # Runs with a pre-training baseline eval have one more eval round than
+    # DAGGER iterations — plot it as round 0 (untrained policy).
+    n_dag = len(d.get("dag_iter", []))
+    has_baseline = n_dag > 0 and n == n_dag + 1
+    it = np.arange(0, n) if has_baseline else np.arange(1, n + 1)
     width = 0.28
     ax.bar(it - width, u_koz, width, color=C_DANGER, alpha=0.85,
            label="unfiltered koz violations")
@@ -418,10 +434,13 @@ def draw_dagger_validation(ax, d):
                label="filtered koz violations")
     # KOZ hits during the unfiltered DAGGER rollouts themselves (baseline_22+):
     # nonzero early means the buffer is receiving near-KOZ avoidance labels;
-    # this and the unfiltered validation bars should fall together.
+    # this and the unfiltered validation bars should fall together.  There is
+    # no rollout before training, so with a baseline round the series aligns
+    # to rounds 1..N.
     dag_rkoz = d.get("dag_rkoz", [])
-    if len(dag_rkoz) == n:
-        ax.bar(it + width, dag_rkoz, width, color="#e67e22", alpha=0.7,
+    if len(dag_rkoz) in (n, n - 1) and len(dag_rkoz) > 0:
+        x_r = it[n - len(dag_rkoz):]
+        ax.bar(x_r + width, dag_rkoz, width, color="#e67e22", alpha=0.7,
                label="rollout koz (label source)")
     ax.set_xticks(it)
     ax.set_ylabel("KOZ violations / episode (mean)")
@@ -430,6 +449,10 @@ def draw_dagger_validation(ax, d):
     if len(u_margin) == n:
         ax2.plot(it, u_margin, "D-", color="#8e44ad", lw=1.5, ms=5,
                   label="unfiltered min θ margin (deg)")
+        u_margin_worst = d.get("dv_u_margin_worst", [])
+        if len(u_margin_worst) == n:
+            ax2.plot(it, u_margin_worst, "v:", color="#8e44ad", lw=1.0, ms=4,
+                     alpha=0.6, label="worst episode margin (deg)")
         ax2.axhline(0, color=C_DANGER, lw=1, ls="--", alpha=0.6)
     ax2.set_ylabel("Min θ margin (deg)", color="#8e44ad", fontsize=8)
     ax2.tick_params(axis="y", labelcolor="#8e44ad", labelsize=7)
@@ -437,7 +460,8 @@ def draw_dagger_validation(ax, d):
 
     ax.set_title("Post-DAGGER Validation — policy safety with filter OFF vs ON",
                  fontsize=9)
-    ax.set_xlabel("DAgger iteration")
+    ax.set_xlabel("Validation round (0 = untrained baseline)" if has_baseline
+                  else "DAgger iteration")
     l1, lb1 = ax.get_legend_handles_labels()
     l2, lb2 = ax2.get_legend_handles_labels()
     ax.legend(l1 + l2, lb1 + lb2, fontsize=7, loc="upper right")
@@ -462,16 +486,33 @@ def draw_filter_reliance(ax, d):
         ax.set_title("Filter Reliance Across DAGGER", fontsize=9)
         return
 
-    it = np.arange(1, n + 1)
+    # Round 0 = pre-training baseline eval (untrained policy), when present.
+    n_dag = len(d.get("dag_iter", []))
+    has_baseline = n_dag > 0 and n == n_dag + 1
+    it = np.arange(0, n) if has_baseline else np.arange(1, n + 1)
     ax.plot(it, frac * 100, "o-", color=C_DANGER, lw=2.2, ms=6,
             label="filter intervention rate (% of steps)", zorder=3)
+
+    # Filter success rate: % of the raw policy's violations that the filter
+    # prevented, derived per round from the paired evals of the same policy
+    # (1 − filtered_koz/unfiltered_koz; 100% when the raw policy is clean).
+    fkoz = np.asarray(d.get("dv_f_koz", []), dtype=float)
+    ukoz_s = np.asarray(d.get("dv_u_koz", []), dtype=float)
+    if len(fkoz) == n and len(ukoz_s) == n:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            success = np.where(ukoz_s > 0,
+                               np.clip(1.0 - fkoz / np.maximum(ukoz_s, 1e-9), 0, 1),
+                               1.0)
+        ax.plot(it, success * 100, "s-", color=C_SAFE, lw=1.8, ms=5, zorder=3,
+                label="filter success rate (% violations prevented)")
     if len(fb) == n and np.any(fb > 0):
         ax.plot(it, fb * 100, "s--", color="#c0392b", lw=1.3, ms=4,
                 label="fallback rate (CBF infeasible, %)")
     ax.axhline(0, color=C_SAFE, lw=1.2, ls="--", alpha=0.8)
     ax.set_ylim(bottom=-0.3)
     ax.set_xticks(it)
-    ax.set_xlabel("DAgger iteration")
+    ax.set_xlabel("Validation round (0 = untrained baseline)" if has_baseline
+                  else "DAgger iteration")
     ax.set_ylabel("Filter usage on NN policy (% of steps)", color=C_DANGER)
     ax.tick_params(axis="y", labelcolor=C_DANGER)
 
@@ -933,8 +974,13 @@ def load_all(ea, T):
     d["dv_u_s"],   d["dv_u_koz"] = load(ea, f"dagger_eval_unfiltered/{T}/koz_violations")
     _,             d["dv_u_rew"] = load(ea, f"dagger_eval_unfiltered/{T}/reward")
     _,             d["dv_u_margin"] = load(ea, f"dagger_eval_unfiltered/{T}/min_theta_margin_deg")
+    _,             d["dv_u_margin_worst"] = load(ea, f"dagger_eval_unfiltered/{T}/min_theta_margin_worst")
 
     d["dag_iter_s"], d["dag_iter"] = load(ea, "dagger/iter")
+    _, d["dag_labelfrac"] = load(ea, "dagger/rollout_label_filtered_frac")
+    _, d["dag_nvse"]      = load(ea, "dagger/nn_vs_expert_mean")
+    d["pol_bnd_s"], d["pol_cbf_bnd"]  = load(ea, "policy/loss_cbf_boundary")
+    d["pol_svf_s"], d["pol_synth_vf"] = load(ea, "policy/cbf_synth_viol_frac")
 
     return d
 

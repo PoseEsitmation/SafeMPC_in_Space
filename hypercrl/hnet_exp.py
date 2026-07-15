@@ -18,8 +18,7 @@ from hypercrl.control.policy_net import (PolicyNet, PolicyTrainer,
                                           make_cheetah_cbf_fn, make_space_cbf_fn,
                                           make_space_clf_fn, make_space_margin_fn,
                                           make_space_boundary_sampler,
-                                          make_space_cbf_feasible_fn,
-                                          make_space_cbf_safety_head)
+                                          make_space_cbf_feasible_fn)
 from hypercrl.control.agent import _preprocess_state_torch
 from hypercrl.envs.cl_env import CLEnvHandler
 from hypercrl.dataset.datautil import DataCollector
@@ -444,7 +443,6 @@ def _eval_nn_policy(
     all_du_max        = []
     all_min_margin    = []
     all_att_err       = []
-    head_du_all       = []   # CBF safety-head correction per step (0 if no head)
 
     saved_filter = getattr(nn_agent, "safety_filter", None)
     if disable_filter:
@@ -467,7 +465,6 @@ def _eval_nn_policy(
 
             while not done:
                 u = nn_agent.act(x_t, task_id=task_id).detach().cpu().numpy()
-                head_du_all.append(float(getattr(nn_agent.policy, "last_head_du", 0.0)))
                 x_tt, reward, terminated, truncated, info = env.step(
                     u.reshape(env.action_space.shape))
                 done       = terminated or truncated
@@ -527,14 +524,6 @@ def _eval_nn_policy(
     writer.add_scalar(f"{tag_prefix}/task_{task_id}/att_err_final_deg",    avg_att_err,    global_step)
     writer.add_scalar(f"{tag_prefix}/task_{task_id}/min_theta_margin_worst", worst_min_margin, global_step)
     writer.add_scalar(f"{tag_prefix}/task_{task_id}/koz_violations_max",     max_koz,          global_step)
-    # Safety-head internalisation: how much the closed-form CBF layer had to
-    # correct the raw MLP output.  → 0 across DAGGER iterations = the network
-    # is learning to be safe without the layer.
-    if head_du_all:
-        writer.add_scalar(f"{tag_prefix}/task_{task_id}/head_du_mean",
-                          float(np.mean(head_du_all)), global_step)
-        writer.add_scalar(f"{tag_prefix}/task_{task_id}/head_du_max",
-                          float(np.max(head_du_all)),  global_step)
     print(
         f"  [{tag_prefix}] task {task_id}  n_eps={n_episodes}  reward={avg_reward:.2f}"
         f"  koz={avg_koz:.1f} (max {max_koz:.0f})"
@@ -542,11 +531,64 @@ def _eval_nn_policy(
         f"  filter_frac={avg_filt_frac:.3f}  fallback_frac={avg_fb_frac:.3f}"
         f"  du_mean={avg_du_mean:.3f}  du_max={avg_du_max:.3f}"
     )
+    return {"koz": avg_koz, "reward": avg_reward, "filter_frac": avg_filt_frac}
+
+
+def _log_filter_success(writer, task_id: int, step: int, res_f: dict, res_u: dict) -> None:
+    """Filter success: violations the QP prevented for the SAME policy.
+
+    The filtered and unfiltered validations run the identical policy at the
+    identical training step (on fresh random episodes), so the difference in
+    KOZ violations is attributable to the filter:
+
+        saves_per_ep  = unfiltered_koz − filtered_koz
+        success_rate  = 1 − filtered_koz / unfiltered_koz
+
+    When the raw policy no longer violates at all (unfiltered_koz = 0) there
+    is nothing left to save — the rate is logged as 1.0 (vacuously perfect,
+    and the desired end state).
+    """
+    if writer is None or res_f is None or res_u is None:
+        return
+    saves = max(res_u["koz"] - res_f["koz"], 0.0)
+    if res_u["koz"] > 0:
+        rate = min(max(1.0 - res_f["koz"] / res_u["koz"], 0.0), 1.0)
+    else:
+        rate = 1.0
+    writer.add_scalar(f"dagger_eval/task_{task_id}/filter_saves_per_ep",  saves, step)
+    writer.add_scalar(f"dagger_eval/task_{task_id}/filter_success_rate", rate,  step)
+    print(f"  [filter] prevented {saves:.1f} violation-steps/ep  "
+          f"success_rate={rate:.0%}")
 
 
 def run(hparams):
 
     print("[DEBUG run] ENTRY:", hparams.device)
+
+    # Fixed-scenario mode (paper-equivalent evaluation difficulty): pin the
+    # per-episode randomisation to one corridor geometry — init attitude
+    # error 120–140° and a constant 20° KOZ half-angle (the KOZ centre is
+    # already deterministic: ratio 0.5 midway between start and goal
+    # boresight).  This mirrors the paper's single fixed CR scenario, where
+    # raw-policy avoidance is learnable; the fully randomised default asks
+    # the network to generalise planner-like across arbitrary geometries.
+    # SatDynEnv.reset() reads these module globals at call time.
+    if getattr(hparams, "space_fixed_scenario", False) \
+            and hparams.env.startswith("spaceEnv"):
+        import hypercrl.envs.space_KOZ as _sk
+        _sk.angle_bound_lower  = 120
+        _sk.angle_bound_upper  = 140
+        _sk.half_angle_low_deg  = 20.0
+        _sk.half_angle_high_deg = 20.0
+        # Offset the cone centre 10° off the start→goal arc: still blocks the
+        # direct path (half-angle 20°) but one detour side is clearly shorter,
+        # so the expert's avoidance is unimodal — plain MSE imitation of a
+        # symmetric cone averages the left/right detour modes into a
+        # through-the-cone trajectory.
+        _sk.vector_rotation_angle2_low  = 10.0
+        _sk.vector_rotation_angle2_high = 10.0
+        print("[env] fixed scenario: init error 120-140°, KOZ half-angle 20°, "
+              "cone offset 10° (unimodal detour)")
 
     # Reset seed
     reset_seed(hparams.seed)
@@ -678,6 +720,11 @@ def run(hparams):
         # Augment Model, instantiate optimizers/regularizer targets
         trainer_misc = augment_model(task_id, mnet, hnet, collector, hparams)
 
+        # Pre-training baseline eval fires once per task, right before the
+        # first policy training (needs the per-task norms, which exist only
+        # after the first dynamics update inside the loop below).
+        baseline_eval_done = False
+
         # Interact with the environment
         x_t, _ = env.reset()
         agent.reset()
@@ -715,20 +762,40 @@ def run(hparams):
                         policy_trainer.cbf_feasible_fn = make_space_cbf_feasible_fn(
                             x_mu, x_std, _raw_env.inertia,
                             eps=getattr(hparams, "policy_cbf_eps_train", 0.0))
-                        # Closed-form CBF safety layer inside the policy: the
-                        # network itself satisfies the barrier wherever
-                        # control-feasible — no QP at inference.  last_head_du
-                        # (logged per eval) is the internalisation metric.
-                        if getattr(hparams, "policy_safety_head", False):
-                            policy_trainer.policy.safety_head = \
-                                make_space_cbf_safety_head(
-                                    x_mu, x_std, a_mu, a_std, _raw_env.inertia,
-                                    eps=getattr(hparams, "policy_head_eps", 0.03))
 
                 # Train NN policy — wait until MPC has collected meaningful data.
                 # Use the combined dataset (BC base + DAGGER expert buffer) so
                 # the policy always trains on correct expert labels.
                 if it >= getattr(hparams, "policy_train_start", 0):
+                    # Round-0 baseline: evaluate the UNTRAINED policy (for
+                    # task 0; for later tasks: the pre-task policy) with and
+                    # without the filter, under the same dagger_eval_* tags.
+                    # The validation charts then start from the untrained
+                    # level, making the decline of filter activations and
+                    # unfiltered KOZ violations across DAGGER rounds explicit.
+                    if not baseline_eval_done:
+                        baseline_eval_done = True
+                        bl_env = logger.eval_envs.get_env(task_id)
+                        nn_agent.cache_state_norm(task_id)
+                        if hasattr(bl_env, 'get_safety_filter'):
+                            nn_agent.set_safety_filter(bl_env.get_safety_filter())
+                        print(f"  [baseline eval] task {task_id} — untrained policy (round 0)")
+                        _bl_f = _eval_nn_policy(
+                            nn_agent, bl_env, task_id, logger.writer,
+                            policy_trainer._step,
+                            n_episodes=getattr(hparams, "dagger_val_eps_filtered", 10),
+                            tag_prefix="dagger_eval_filtered",
+                            disable_filter=False,
+                        )
+                        _bl_u = _eval_nn_policy(
+                            nn_agent, bl_env, task_id, logger.writer,
+                            policy_trainer._step,
+                            n_episodes=getattr(hparams, "dagger_val_eps_unfiltered", 40),
+                            tag_prefix="dagger_eval_unfiltered",
+                            disable_filter=True,
+                        )
+                        _log_filter_success(logger.writer, task_id,
+                                            policy_trainer._step, _bl_f, _bl_u)
                     # BC base = MPC-phase rows only.  The random phase's
                     # "labels" are RandomAgent noise (unclipped randn — 27% of
                     # the base in baseline_27 with u_target_norm_max pinned at
@@ -838,20 +905,33 @@ def run(hparams):
                 # Episode counts differ: unfiltered episodes are nearly free
                 # and carry the high-variance safety signal; filtered ones
                 # solve the QP every step (~6 s/episode) — see default_arg.
-                _eval_nn_policy(
+                _dv_f = _eval_nn_policy(
                     nn_agent, val_env, task_id, logger.writer, policy_trainer._step,
                     n_episodes=getattr(hparams, "dagger_val_eps_filtered", 10),
                     tag_prefix="dagger_eval_filtered",
                     disable_filter=False,
                 )
-                _eval_nn_policy(
+                _dv_u = _eval_nn_policy(
                     nn_agent, val_env, task_id, logger.writer, policy_trainer._step,
                     n_episodes=getattr(hparams, "dagger_val_eps_unfiltered", 20),
                     tag_prefix="dagger_eval_unfiltered",
                     disable_filter=True,
                 )
+                _log_filter_success(logger.writer, task_id,
+                                    policy_trainer._step, _dv_f, _dv_u)
+
+                # Persist the distilled policy after every DAGGER round — the
+                # mnet/hnet checkpoints never included it, so a crash (or the
+                # end of the run) would otherwise lose the actual deliverable.
+                torch.save(policy_trainer.policy.state_dict(),
+                           os.path.join(logger.model_dir, "policy_last.pt"))
 
         augment_model_after(task_id, mnet, hnet, hparams, collector)
+
+        # End-of-task policy snapshot (aligned with model_{task}.pt naming)
+        if not hparams.resume:
+            torch.save(policy_trainer.policy.state_dict(),
+                       os.path.join(logger.model_dir, f"policy_{task_id}.pt"))
 
         # Save Model
         logger.save(task_id)
@@ -874,7 +954,8 @@ def chunked_hnet(env, seed=None, savepath=None, play=False, render=False, run_na
 
 
 def hnet(env, seed=None, savepath=None, play=False, render=False, device="cpu",
-         run_name=None, num_tasks=None, norms_path=None):
+         run_name=None, num_tasks=None, norms_path=None, fast_dagger=False,
+         fixed_scenario=False):
     # Hyperparameters
     hparams = HP(env, seed, savepath, run_name=run_name)
     hparams.model = "hnet"
@@ -884,6 +965,26 @@ def hnet(env, seed=None, savepath=None, play=False, render=False, device="cpu",
         hparams.num_tasks = num_tasks
     if norms_path is not None:
         hparams.norms_path = norms_path
+    hparams.space_fixed_scenario = fixed_scenario
+
+    if fast_dagger:
+        # Shortened single-task profile to answer "does DAGGER internalise
+        # safety?" (~1.5 h on cuda vs ~4-5 h/task for the full profile).
+        # The pre-DAGGER phases are untouched: the expert must be competent
+        # before its labels are worth imitating (policy_train_start=10000),
+        # and the random phase feeds the dynamics model.  Savings come from
+        # one task, a shorter DAGGER window, leaner rollouts and fewer
+        # QP-filtered validation episodes.
+        hparams.fast_dagger = True
+        if num_tasks is None:
+            hparams.num_tasks = 1
+        hparams.max_iteration = 15000        # DAGGER window 10000–14500
+        hparams.dagger_n_iter = 10           # κ anneals 0.9 → 0 over 10 iters
+        hparams.dagger_n_rollout = 3          # 3 rollouts/iter (0.4 → 1-2 student)
+        hparams.dagger_val_eps_filtered = 10  # filter_fraction is the headline
+                                              # decline metric — 5 eps was too
+                                              # noisy for a rare-event rate
+                                              # (unfiltered stays cheap at 40)
 
     hparams = Hparams.add_hnet_hparams(hparams)
 

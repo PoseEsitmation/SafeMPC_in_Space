@@ -89,6 +89,8 @@ def run_hnet(args):
         run_name=getattr(args, 'name', None),
         num_tasks=getattr(args, 'num_tasks', None),
         norms_path=getattr(args, 'norms_path', None),
+        fast_dagger=getattr(args, 'fast_dagger', False),
+        fixed_scenario=getattr(args, 'fixed_scenario', False),
     )
 
 
@@ -265,6 +267,10 @@ def main():
                              help="Override the number of continual-learning tasks (e.g. 1 for a single-task validation run)")
     run_parser.add_argument("--norms-path", type=str, default=None, dest="norms_path",
                              help="Path to a norms.pt saved by a previous run; reuses its frozen normalisation stats so both runs share the same coordinate system")
+    run_parser.add_argument("--fast-dagger", action="store_true", dest="fast_dagger",
+                             help="Shortened single-task DAGGER-validation profile (~1.5h): 15k steps, 10 DAGGER iters, leaner rollouts/validation")
+    run_parser.add_argument("--fixed-scenario", action="store_true", dest="fixed_scenario",
+                             help="spaceEnv: pin the scenario geometry (init error 120-140°, KOZ half-angle 20°) — paper-equivalent fixed-corridor evaluation")
 
     args = parser.parse_args()
 
