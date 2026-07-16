@@ -978,8 +978,10 @@ def hnet(env, seed=None, savepath=None, play=False, render=False, device="cpu",
         hparams.fast_dagger = True
         if num_tasks is None:
             hparams.num_tasks = 1
-        hparams.max_iteration = 15000        # DAGGER window 10000–14500
-        hparams.dagger_n_iter = 10           # κ anneals 0.9 → 0 over 10 iters
+        hparams.max_iteration = 15000
+        # Rounds span the whole trainable stretch (policy_train_start → end):
+        hparams.dagger_n_iter = (hparams.max_iteration
+                                 - hparams.policy_train_start) // hparams.dagger_every
         hparams.dagger_n_rollout = 3          # 3 rollouts/iter (0.4 → 1-2 student)
         hparams.dagger_val_eps_filtered = 10  # filter_fraction is the headline
                                               # decline metric — 5 eps was too

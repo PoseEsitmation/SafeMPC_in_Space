@@ -139,7 +139,10 @@ def default_arg_policy(hparams):
     # signal → fewer.  The same counts are used for the pre-training
     # baseline eval (round 0, untrained policy).
     hparams.dagger_val_eps_unfiltered = 40
-    hparams.dagger_val_eps_filtered = 10
+    # 15 filtered episodes (was 10): the intervention rate is a rare-event
+    # estimate and its round-to-round scatter was the main noise source in
+    # the reliance-decline chart (paper_final2).  ~+30 s per round.
+    hparams.dagger_val_eps_filtered = 15
     # Safety-prioritised sampling for policy training: rows where the expert's
     # filter corrected the label, and rows within policy_safety_margin_deg of
     # the KOZ boundary, are drawn up to policy_safety_oversample x more often
@@ -1094,12 +1097,12 @@ def default_arg_sat(hparams):
     hparams.max_iteration = 20000
     hparams.dynamics_update_every = 500
     # The MPC expert needs several episodes of model learning before its
-    # rollouts reach the goal (confirmed run: competent from ~ep 6).  Starting
-    # imitation earlier trains the policy on garbage labels — baseline_16/17
-    # started at 2000 and the expert still violated the KOZ at its step-5000
-    # eval.  BC starts here; DAGGER starts at the first dagger_every multiple
-    # after this.
-    hparams.policy_train_start = 10000
+    # labels are worth imitating (baseline_16/17: starting at 2000 trained on
+    # garbage).  Under the FIXED SCENARIO the expert is goal-reaching from
+    # episode 3-4 (paper_final: att_err 2.1° at ep 3, reward 1237 at ep 4), so
+    # the old 10000 gate wasted half the run: 6000 starts BC/DAGGER after ~6
+    # competent-ish episodes and yields 28 DAGGER rounds instead of 20.
+    hparams.policy_train_start = 6000
 
     # Common Dynamics Model
     hparams.dnn_out = "diff"
@@ -1180,9 +1183,12 @@ def default_arg_sat(hparams):
     # and doubling, the 500 cap arrives at iter ~7 of 10 (fast profile).
     hparams.policy_lambda_ramp = 2.0
     hparams.policy_lambda_max = 500.0
-    hparams.dagger_every = 500    # DAGGER at steps 10000, 10500, ..., 19500
-    hparams.dagger_n_iter = 20     # κ anneals 0.95 → 0.0 across the 20 iters
-    hparams.dagger_n_rollout = 5      # rollout episodes per DAGGER iteration
+    hparams.dagger_every = 500    # DAGGER at steps 6000, 6500, ..., 19500
+    hparams.dagger_n_iter = 28     # (20000-6000)/500 — κ anneals 0.96 → 0.0
+    # 3 rollouts/round (was 5): with 40% more rounds this keeps total expert-
+    # labelling cost flat while giving a finer κ/λ curriculum and 8 more
+    # retrain+validation points; student episodes: round(0.4*3) = 1 per round.
+    hparams.dagger_n_rollout = 3
     # Oversample safety-critical rows ~10x: expert-filter-corrected labels
     # (buffer tags) and states within 15° of the KOZ (θ-margin, all rows) —
     # they are ~a few % of the data but carry all the avoidance knowledge.

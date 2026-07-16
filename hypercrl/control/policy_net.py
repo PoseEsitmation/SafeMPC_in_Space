@@ -735,6 +735,10 @@ def make_space_cbf_components(
     The affine-in-u structure is what makes the closed-form safety head and
     the feasibility test possible (best case over the box = c0 + Σ|bᵢ|).
 
+    gamma default 0.2 — KEEP IN SYNC with SpaceAttitudeCBF in
+    envs/space_cbf_clf.py: the training loss must penalise the same condition
+    the runtime QP filter enforces.
+
     State layout (collector-normalised, 13-dim):
         [0:4]  q_e (error quaternion, scalar-first)
         [4:7]  omega_norm  (physical: * 5 rad/s)

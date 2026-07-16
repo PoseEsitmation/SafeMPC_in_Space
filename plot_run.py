@@ -505,6 +505,14 @@ def draw_filter_reliance(ax, d):
                                1.0)
         ax.plot(it, success * 100, "s-", color=C_SAFE, lw=1.8, ms=5, zorder=3,
                 label="filter success rate (% violations prevented)")
+
+    # Intervention severity relative to the untrained baseline — the paper's
+    # Fig. 4 metric.  Declines cleanly even when the intervention *rate*
+    # floors (small-γ runs where the corridor pass legitimately binds).
+    du = np.asarray(d.get("dv_f_du", []), dtype=float)
+    if len(du) == n and du[0] > 0:
+        ax.plot(it, du / du[0] * 100, "D--", color=C_CBF, lw=1.5, ms=4,
+                zorder=3, label="intervention severity (% of untrained)")
     if len(fb) == n and np.any(fb > 0):
         ax.plot(it, fb * 100, "s--", color="#c0392b", lw=1.3, ms=4,
                 label="fallback rate (CBF infeasible, %)")
@@ -588,24 +596,23 @@ def draw_phase_comparison(fig, d, hp):
     total_x = rand_steps + (cx_tr.max() if len(cx_tr) > 0 else 1)
 
     # ── phase boundary x-coordinates (combined) ──────────────────────────────
+    # DAgger rounds fire at env steps that are multiples of dag_every AND
+    # >= policy_train_start (see hnet_exp) — anchor the markers there, not at
+    # the end of the random phase (the old anchor squeezed all bands into the
+    # pre-DAgger stretch and mislabelled the timeline).
     b_rand_end = rand_steps
     b_bc_start = rand_steps + pol_start
-    b_dag_starts = [rand_steps + (i + 1) * dag_every for i in range(dag_n)]
-    # clip to actual data length
+    first_dag = int(np.ceil(pol_start / max(dag_every, 1))) * dag_every
+    b_dag_starts = [rand_steps + first_dag + i * dag_every for i in range(dag_n)]
     b_dag_starts = [x for x in b_dag_starts if x < total_x]
 
-    # ── colour bands ──────────────────────────────────────────────────────────
+    # ── colour bands (three clean phases — per-round bands overlap badly) ────
     BANDS = [
         (0,          b_rand_end,  "#ffecec", "Random\n(no filter)"),
-        (b_rand_end, b_bc_start,  "#fff8e8", "MPC + filter\n(no NN)"),
-        (b_bc_start, b_dag_starts[0] if b_dag_starts else total_x,
-         "#eaf4ff", "BC supervised"),
+        (b_rand_end, b_bc_start,  "#fff8e8", "MPC expert + filter\n(data collection)"),
+        (b_bc_start, total_x,     "#e4f7e9",
+         f"BC + DAgger refinement  ({len(b_dag_starts)} rounds, every {dag_every})"),
     ]
-    dag_colours = ["#edfff0", "#d6f5da", "#b8ecc0", "#9de3a8", "#7dd990"]
-    for i, bx in enumerate(b_dag_starts):
-        end = b_dag_starts[i + 1] if i + 1 < len(b_dag_starts) else total_x
-        BANDS.append((bx, end, dag_colours[i % len(dag_colours)],
-                      f"DAgger\niter {i+1}"))
 
     # ── create subplots: θ-margin timeline + reward strip ────────────────────
     gs = gridspec.GridSpecFromSubplotSpec(
@@ -656,21 +663,26 @@ def draw_phase_comparison(fig, d, hp):
                     "|", color=C_FILTER, alpha=0.2, ms=4, zorder=3,
                     label="Filter correction")
 
-    # DAgger iteration vertical lines
+    # DAgger round markers: thin ticks for every round, text label only for
+    # every 5th (and first/last) — 20 labels at 500-step spacing overlap.
+    n_dag_marks = len(b_dag_starts)
     for i, bx in enumerate(b_dag_starts):
-        ax_top.axvline(bx, color="#2c7a4b", lw=1.5,
-                       ls=":", alpha=0.9, zorder=5)
-        ax_top.text(bx + total_x * 0.004, ax_top.get_ylim()[0] if False else -15,
-                    f"DAgger {i+1}", fontsize=7, color="#2c7a4b",
-                    rotation=90, va="bottom")
+        labelled = (i == 0 or i == n_dag_marks - 1 or (i + 1) % 5 == 0)
+        ax_top.axvline(bx, color="#2c7a4b", lw=1.2 if labelled else 0.6,
+                       ls=":", alpha=0.85 if labelled else 0.35, zorder=5)
+        if labelled:
+            ax_top.text(bx + total_x * 0.003, -15,
+                        f"DAgger {i+1}", fontsize=7, color="#2c7a4b",
+                        rotation=90, va="bottom")
 
-    # dynamics model training markers (every dyn_every within training phase)
+    # dynamics model training markers — skip when they'd carpet the plot
     dyn_x = [rand_steps + k * dyn_every
              for k in range(1, int(total_x / dyn_every) + 1)
              if rand_steps + k * dyn_every < total_x]
-    for dx in dyn_x:
-        ax_top.axvline(dx, color="#95a5a6", lw=0.8,
-                       ls="--", alpha=0.4, zorder=2)
+    if len(dyn_x) <= 25:
+        for dx in dyn_x:
+            ax_top.axvline(dx, color="#95a5a6", lw=0.8,
+                           ls="--", alpha=0.4, zorder=2)
 
     # phase boundary heavy line
     # ax_top.axvline(b_rand_end, color="#555", lw=2, alpha=0.7, zorder=6,               label="Filter ON")
@@ -685,20 +697,25 @@ def draw_phase_comparison(fig, d, hp):
         fontsize=11, fontweight="bold")
     ax_top.set_xlim(0, total_x)
 
-    # ── bottom: eval rewards over the same timeline ──────────────────────────
-    # Expert eval reward (env-step axis → combined coords).
-    if len(d["ev_rew_s"]) > 0:
-        ax_bot.plot(d["ev_rew_s"] + rand_steps, d["ev_rew"], "s-",
-                    color=C_EVAL_EXPERT, lw=1.5, ms=4,
-                    label="Eval env (hnet MPC)")
-    # Post-DAgger NN-policy eval rewards — one point per DAgger iteration,
-    # pinned to the DAgger event positions on the combined axis.
-    dag_xs = b_dag_starts[:len(d["dv_f_rew"])]
+    # ── bottom: NN-policy eval rewards over the same timeline ────────────────
+    # (The expert's eval reward is intentionally NOT drawn here: its sparse
+    # 1500-3300 points compressed the y-axis and flattened the NN series,
+    # which is this strip's story.  Expert rewards live in 05_rewards.)
+    # Post-DAgger NN-policy eval rewards — one point per validation round,
+    # pinned to the round positions on the combined axis.  Runs with a
+    # round-0 baseline have one extra leading point, evaluated at
+    # policy_train_start (before the first DAgger round).
+    def _round_xs(series_len):
+        if series_len == len(b_dag_starts) + 1:
+            return [b_bc_start] + b_dag_starts
+        return b_dag_starts[:series_len]
+
+    dag_xs = _round_xs(len(d["dv_f_rew"]))
     if len(dag_xs) > 0:
         ax_bot.plot(dag_xs, d["dv_f_rew"][:len(dag_xs)], "^-",
                     color=C_NN, lw=1.3, ms=5,
                     label="NN policy (filter ON)")
-    dag_xs_u = b_dag_starts[:len(d["dv_u_rew"])]
+    dag_xs_u = _round_xs(len(d["dv_u_rew"]))
     if len(dag_xs_u) > 0:
         ax_bot.plot(dag_xs_u, d["dv_u_rew"][:len(dag_xs_u)], "v--",
                     color=C_NN, lw=1.1, ms=5, alpha=0.55,
@@ -719,12 +736,17 @@ def draw_phase_comparison(fig, d, hp):
                       fontsize=9)
 
     # ── x-axis tick labels: show actual phase names ───────────────────────────
-    tick_xs = [0, b_rand_end, b_bc_start] + b_dag_starts
+    # Ticks at the phase boundaries + every 5th DAgger round (and the last) —
+    # a tick per round overlaps unreadably at 500-step spacing.
+    n_marks = len(b_dag_starts)
+    dag_ticks = [(i, bx) for i, bx in enumerate(b_dag_starts)
+                 if i == 0 or i == n_marks - 1 or (i + 1) % 5 == 0]
+    tick_xs = [0, b_rand_end, b_bc_start] + [bx for _, bx in dag_ticks]
     tick_lbs = (
         ["0",
          f"{b_rand_end}\n(filter ON)",
          f"{b_rand_end + pol_start}\n(NN training)"] +
-        [f"{int(bx)}\n(DAgger {i+1})" for i, bx in enumerate(b_dag_starts)]
+        [f"{int(bx)}\n(DAgger {i+1})" for i, bx in dag_ticks]
     )
     ax_bot.set_xticks(tick_xs)
     ax_bot.set_xticklabels(tick_lbs, fontsize=7)

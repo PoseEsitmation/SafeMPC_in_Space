@@ -432,6 +432,16 @@ class SatDynEnv(gym.Env):
                 # auto_close=False prevents PyVista from destroying the window
                 # when show() returns — needed for reliable cross-version behaviour.
                 self._pl.show(interactive_update=True, auto_close=False, title="SatDynEnv live render")
+                # Orbit controls: trackball camera (LMB drag = orbit, wheel =
+                # zoom, MMB = pan) pivoting on the satellite at the origin.
+                # Events are pumped per frame via update() below — a plain
+                # render() never processes input, which left the camera locked.
+                self._pl.enable_trackball_style()
+                self._pl.camera.focal_point = (0.0, 0.0, 0.0)
+                try:
+                    self._pl.add_camera_orientation_widget()
+                except Exception:
+                    pass  # older pyvista — orbit still works without the gizmo
 
             self._pl.renderer.AddActor2D(self._info_text)
 
@@ -466,14 +476,19 @@ class SatDynEnv(gym.Env):
         theta_margin_deg = self.state[7] * rad2deg
         self._info_text.SetInput(
             f"theta:         {theta_deg:.1f} deg\n"
-            f"theta_margin:  {theta_margin_deg:.1f} deg"
+            f"theta_margin:  {theta_margin_deg:.1f} deg\n"
+            f"LMB orbit | wheel zoom | MMB pan | r reset"
         )
 
-        self._pl.render()
         if self._off_screen:
+            self._pl.render()
             self._pl.screenshot(
                 os.path.join(self._frame_dir, f'frame_{self.steps:05d}.png')
             )
+        else:
+            # update() pumps mouse/keyboard events AND redraws, so the user
+            # can orbit/zoom while the episode plays.
+            self._pl.update()
 
     # ------------------------------------------------------------------
     # Safety filter interface (paper Eq. 19)

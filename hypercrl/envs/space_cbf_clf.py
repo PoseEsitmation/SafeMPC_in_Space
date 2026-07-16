@@ -97,6 +97,12 @@ class SpaceAttitudeCBF(CBF):
         Class-K multiplier α(H) = γ·H in the CBF condition (paper Sec. III.A).
     """
 
+    # gamma = 0.5 (paper value).  gamma=0.2 was evaluated in paper_final2:
+    # it binds ~2.5x earlier (gentle corrections, perfect safety even for the
+    # untrained policy) but floors the intervention RATE at ~2% — the
+    # reliance-declines-to-zero result needs 0.5 (paper_final: 8.6%→0.00%).
+    # KEEP IN SYNC with the torch factories in control/policy_net.py
+    # (training loss must match the runtime filter).
     def __init__(self, env, gamma: float = 0.5) -> None:
         self._env   = env
         self.gamma  = gamma

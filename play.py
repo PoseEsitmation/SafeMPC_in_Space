@@ -197,6 +197,44 @@ def restore_norms(agent: SafeAgent, checkpoint: dict, task_id: int,
     mpc.a_std = n["a_std"].to(device)
 
 
+def restore_diff_norms(agent: SafeAgent, hparams: Hparams, task_id: int,
+                       device: str, folder: str) -> None:
+    """Restore the diff-target normalisation (dnn_out='diff' + normalize_diff).
+
+    The model predicts per-dim-std-SCALED state diffs (std ~1e-3 for this
+    env); MPC._dynamics must rescale them (xx*dx_std) before integrating.
+    build_agent creates the MPC with collector=None, which silently disables
+    normalize_diff — without this restore the planner integrates raw O(1)
+    outputs, its imagined dynamics are ~1000x too fast, and the replayed
+    'expert' commands garbage torques (spacecraft tumbling wildly).
+    """
+    if not (getattr(hparams, "normalize_diff", False)
+            and getattr(hparams, "dnn_out", "") == "diff"):
+        return
+
+    pkl_path = os.path.join(folder, "data.pkl")
+    if not os.path.isfile(pkl_path):
+        print("[play] WARNING: normalize_diff run but no data.pkl — "
+              "diff stats unavailable, dynamics will be wrong")
+        return
+    import pickle
+    from hypercrl import dataset as _ds_module
+    sys.modules.setdefault("dataset", _ds_module)
+    with open(pkl_path, "rb") as f:
+        collector = pickle.load(f)
+    try:
+        dx_mu, dx_std = collector.norm_diff(task_id)
+    except (KeyError, AttributeError):
+        print(f"[play] WARNING: no diff norms for task {task_id} in data.pkl")
+        return
+
+    mpc = agent.mpc
+    mpc.normalize_diff = True
+    mpc.dx_mu = dx_mu.to(device)
+    mpc.dx_std = dx_std.to(device)
+    print(f"[play] diff-target norms restored for task {task_id}")
+
+
 # ---------------------------------------------------------------------------
 # stats saving
 # ---------------------------------------------------------------------------
@@ -283,6 +321,7 @@ def play(folder: str, task: int = None, episodes: int = 10) -> None:
         # Restore normalization stats for this task (critical: model was
         # trained on normalised inputs; without this, MPC produces bad actions)
         restore_norms(agent, checkpoint, tid, hparams.device, folder)
+        restore_diff_norms(agent, hparams, tid, hparams.device, folder)
 
         # CLEnvHandler._envs is indexed by position, so tasks must be added in order.
         # If tid > len(_envs), fill the gap with dummy envs (render=False) so that
@@ -290,6 +329,10 @@ def play(folder: str, task: int = None, episodes: int = 10) -> None:
         for skip_id in range(len(envs._envs), tid):
             envs.add_task(skip_id, render=False)
         env = envs.add_task(tid, render=True)
+        # Match training-time deployment: the expert always ran behind the
+        # QP safety filter.
+        if hasattr(env, "get_safety_filter"):
+            agent.set_safety_filter(env.get_safety_filter())
         print(f"--- Task {tid} ---")
 
         for ep in range(episodes):
