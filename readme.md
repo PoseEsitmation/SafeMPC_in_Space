@@ -13,7 +13,7 @@ learned model predicts.
 ```
 SafeMPC_in_Space/
 ├── main.py                       # CLI entry point
-├── play.py                       # standalone checkpoint replayer
+├── play.py                       # checkpoint replayer
 ├── hypercrl/
 │   ├── envs/space_KOZ.py         # satellite attitude env with KOZ
 │   ├── control/safety_filter.py  # CBF/CLF-QP filter
@@ -21,7 +21,6 @@ SafeMPC_in_Space/
 │   ├── hypercl/                  # hypernetwork (hnet/mnet)
 │   └── model/                    # dynamics model training
 ├── scripts/                      # analysis and batch-run helpers
-├── robosuite/                    # local fork of robosuite
 └── DOCS/                         # component and API definitions
 ```
 
