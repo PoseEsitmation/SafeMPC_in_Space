@@ -306,7 +306,7 @@ def play(folder: str, task: int = None, episodes: int = 10) -> None:
     stat_rows: list[dict] = []
 
     for tid in tasks_to_play:
-        # For single-task model, reload per-task weights when they exist
+
         if hparams.model == "single" and num_seen > 1:
             task_pt = os.path.join(_model_dir(folder), f"model_{tid}.pt")
             if os.path.isfile(task_pt):
@@ -318,14 +318,10 @@ def play(folder: str, task: int = None, episodes: int = 10) -> None:
         if weights_task != tid:
             print(f"[play] task {tid} is untrained — using task {weights_task} weights")
 
-        # Restore normalization stats for this task (critical: model was
-        # trained on normalised inputs; without this, MPC produces bad actions)
+
         restore_norms(agent, checkpoint, tid, hparams.device, folder)
         restore_diff_norms(agent, hparams, tid, hparams.device, folder)
 
-        # CLEnvHandler._envs is indexed by position, so tasks must be added in order.
-        # If tid > len(_envs), fill the gap with dummy envs (render=False) so that
-        # _envs[tid] exists when we call add_task(tid) below.
         for skip_id in range(len(envs._envs), tid):
             envs.add_task(skip_id, render=False)
         env = envs.add_task(tid, render=True)
@@ -343,7 +339,7 @@ def play(folder: str, task: int = None, episodes: int = 10) -> None:
 
             while not done:
                 env.render()
-                u_t = agent.act(x_t, task_id=weights_task).detach().cpu().numpy() #weights_task specifying weights for task (->learned/not learned)
+                u_t = agent.act(x_t, task_id=weights_task).detach().cpu().numpy() #specifying weights for task (learned/not learned)
                 x_tt, reward, terminated, truncated, _ = env.step(
                     u_t.reshape(env.action_space.shape))
                 done = terminated or truncated
@@ -354,8 +350,8 @@ def play(folder: str, task: int = None, episodes: int = 10) -> None:
             ep_len = len(rewards)
             print(f"  ep {ep + 1}/{episodes}  reward={ep_reward:.1f}  steps={ep_len}")
             stat_rows.append({
-                "task": tid,  # environment identity, not weights_task (may differ for untrained tasks)
-                "weights_task": weights_task, #information on weights used to produce those results
+                "task": tid,  # environment identity, not weights_task
+                "weights_task": weights_task, #information on weights
                 "episode": ep,
                 "reward": ep_reward,
                 "steps": ep_len,
@@ -366,7 +362,6 @@ def play(folder: str, task: int = None, episodes: int = 10) -> None:
 
     envs.close()
     save_replay_stats(folder, stat_rows)
-
 
 # ---------------------------------------------------------------------------
 # CLI

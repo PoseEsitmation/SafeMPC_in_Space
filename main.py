@@ -9,24 +9,10 @@ logging.basicConfig(
 )
 
 
-# ============================================================
-# DEVICE PARSING
-# ============================================================
+# Device parsing
 def parse_device(device_str: str | None) -> str:
-    """
-    Central device parsing utility.
 
-    This function normalizes all device inputs into a consistent format:
-    - "cpu"
-    - "cuda:X"
-    - "mps"
-
-    It also applies safe fallbacks if requested devices are unavailable.
-    """
-
-    # --------------------------------------------------------
-    # DEFAULT: auto-select best available device
-    # --------------------------------------------------------
+    # Default: auto-select
     if device_str is None:
         if torch.cuda.is_available():
             return "cuda:0"
@@ -36,47 +22,24 @@ def parse_device(device_str: str | None) -> str:
 
     device_str = device_str.lower()
 
-    # --------------------------------------------------------
-    # CPU
-    # --------------------------------------------------------
     if device_str == "cpu":
         return "cpu"
 
-    # --------------------------------------------------------
-    # CUDA
-    # --------------------------------------------------------
     if device_str.startswith("cuda"):
         if not torch.cuda.is_available():
             return "cpu"
 
-        # normalize shorthand "cuda" -> "cuda:0"
         return "cuda:0" if device_str == "cuda" else device_str
 
-    # --------------------------------------------------------
-    # Apple Metal Performance Shaders (MPS)
-    # --------------------------------------------------------
     if device_str == "mps":
         if torch.backends.mps.is_available():
             return "mps"
         return "cpu"
 
-    # --------------------------------------------------------
-    # FALLBACK
-    # --------------------------------------------------------
     return "cpu"
 
 
-# ============================================================
-# METHOD WRAPPERS
-# ============================================================
-"""
-Each wrapper function is responsible for:
-- forwarding CLI arguments to hypercrl
-- ensuring consistent parameter passing
-- isolating CLI layer from training logic
-"""
-
-
+# Method wrappers: forward CLI args to hypercrl
 def run_hnet(args):
     """Run Hypernetwork-based continual learning."""
     return hypercrl.hnet(
@@ -214,13 +177,7 @@ def run_hnet_replay(args):
     )
 
 
-# ============================================================
-# METHOD REGISTRY
-# ============================================================
-"""
-Central dispatch table mapping CLI methods to implementations.
-This avoids large if/elif chains and simplifies extension.
-"""
+# Method registry: dispatch table mapping CLI methods to implementations
 METHODS = {
     "hnet": run_hnet,
     "pnn": run_pnn,
@@ -236,24 +193,13 @@ METHODS = {
 }
 
 
-# ============================================================
-# CLI ENTRY POINT
-# ============================================================
+# CLI entry point. Example: python main.py run --method hnet --env spaceEnv --device cpu
 def main():
-    """
-    Command-line interface entry point.
-
-    Example usage:
-        python main.py run --method si --env cartpole --device cpu
-    """
-
     parser = argparse.ArgumentParser(description="HyperCRL training CLI")
 
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    # --------------------------------------------------------
     # unified RUN command
-    # --------------------------------------------------------
     run_parser = sub.add_parser("run", help="Run a selected method")
     run_parser.add_argument("--method", required=True, choices=METHODS.keys())
     run_parser.add_argument("--env", required=True)
@@ -274,15 +220,9 @@ def main():
 
     args = parser.parse_args()
 
-    # --------------------------------------------------------
-    # DEVICE NORMALIZATION
-    # --------------------------------------------------------
     args.device = parse_device(args.device)
     print(f"[DEBUG] Using device: {args.device}")
 
-    # --------------------------------------------------------
-    # DISPATCH EXECUTION
-    # --------------------------------------------------------
     fn = METHODS[args.method]
     fn(args)
 

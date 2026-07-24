@@ -1,4 +1,4 @@
-# Satellite attitude control env with Keep-Out Zone (Phase 1).
+# Satellite attitude control env with Keep-Out Zone.
 # State (13,): [qe(4), omega_e(3), theta_margin(1), theta(1), rel_avoid_in_b(3), qe_0_prev(1)]
 # Action (3,): normalised torques in [-1, 1], scaled by scale_torque [Nm]
 
@@ -29,15 +29,14 @@ q_desired_array_global    = np.array([1.0, 0.0, 0.0, 0.0])   # target attitude (
 omega_desired_array_global = np.array([0.0, 0.0, 0.0])        # target angular rate
 boresight_vector_in_b_global = np.array([1.0, 0.0, 0.0])      # instrument axis in body frame (+X)
 
-time_per_step    = 0.1    # [s]
-time_per_episode = 100    # [s]
+time_per_step    = 0.1    
+time_per_episode = 100    
 
 # initial attitude error bounds [deg]
 angle_bound_lower = 80
 angle_bound_upper = 180
 
-# KOZ half-angle sampling bounds [deg] (upper is additionally capped by the
-# geometry-dependent half_angle_max computed at reset)
+# KOZ half-angle sampling bounds [deg]
 half_angle_low_deg = 15.0
 half_angle_high_deg = 30.0
 
@@ -47,7 +46,7 @@ vector_rotation_angle1_ratio_high = 0.5
 vector_rotation_angle2_low  = 0.0   # [deg]
 vector_rotation_angle2_high = 0.0   # [deg]
 
-# --- math helpers (Numba JIT) ---
+# math helpers
 
 @njit
 def sign_fun(x):
@@ -120,7 +119,7 @@ def random_unit_quat_with_angle_bound(lower_deg, upper_deg):
 def random_angular_rate(rate_bound=0.0):
     return np.random.uniform(low=-rate_bound, high=rate_bound, size=3)
 
-# --- reward function ---
+# reward function
 
 def reward_function_with_Fzone(state, action):
     if not hasattr(reward_function_with_Fzone, 'action_prev'):
@@ -136,8 +135,7 @@ def reward_function_with_Fzone(state, action):
     torque_change = np.linalg.norm(action - reward_function_with_Fzone.action_prev) * scale_torque
     reward_function_with_Fzone.action_prev = action.copy()
 
-
-    # full penalty inside KOZ, exponential decay outside
+    # full penalty inside KOZ
     theta_margin = state[7]
     beta, alpha  = 10, 66
     if theta_margin <= 0:
@@ -159,10 +157,10 @@ def reward_function_with_Fzone(state, action):
         return reward0 + 9
     return reward0
 
-# --- environment ---
+# environment
 
 class SatDynEnv(gym.Env):
-    # Satellite attitude control with a single KOZ. See module header for state/action layout.
+    # Satellite attitude control with a single KOZ.
 
     def __init__(self, angle_bound_lower=80, angle_bound_upper=180,
              beta=10, alpha=66, scale_torque=2,
@@ -176,14 +174,6 @@ class SatDynEnv(gym.Env):
         self._scale_torque      = scale_torque       # max thruster torque per axis [Nm]
 
         self.action_space = spaces.Box(low=-1, high=1, shape=(3,), dtype=np.float32)
-
-        # All 13 components are normalised to [-1, 1] by _normalise():
-        #   [0:4]  q_e          — unit-quaternion components
-        #   [4:7]  omega/5      — angular rate divided by scale_omega
-        #   [7]    theta_margin_norm = -1 + (margin + π/2)*4/(3π)
-        #   [8]    theta_norm   = -1 + theta*2/π
-        #   [9:12] rel_avoid_b  — unit-vector difference components
-        #   [12]   qe_0_prev    — previous scalar quaternion component
         self.observation_space = spaces.Box(
             low=-np.ones(13, dtype=np.float32),
             high=np.ones(13, dtype=np.float32),
@@ -192,7 +182,7 @@ class SatDynEnv(gym.Env):
         self.q_desired_array   = q_desired_array_global.copy()
         self.omega_desired_array = omega_desired_array_global.copy()
 
-        if inertia is None: # intertia tensor aka Massenträgheitsverteilung -> default asymmetric
+        if inertia is None: # intertia tensor; default asymmetric
             self.inertia = np.array([
                 [60,  5,  1],
                 [ 5, 50,  2],
@@ -212,14 +202,13 @@ class SatDynEnv(gym.Env):
             if not os.environ.get('DISPLAY'):
                 os.environ.setdefault('VTK_DEFAULT_EGL_DEVICE_INDEX', '0')
 
-        self.state = np.zeros(13, dtype=np.float32)  # placeholder until reset() runs
+        self.state = np.zeros(13, dtype=np.float32)
         self.reset()
 
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
 
-        # clear stateful action memory from previous episode
         if hasattr(reward_function_with_Fzone, 'action_prev'):
             del reward_function_with_Fzone.action_prev
 
@@ -255,9 +244,6 @@ class SatDynEnv(gym.Env):
             half_angle = 0.0
         else:
             half_angle_max = np.minimum(half_angle_max, half_angle_high_deg)
-            # sample KOZ size in [low, min(half_angle_max, high)] (module
-            # globals; a fixed-scenario run pins low == high).  Raising the
-            # lower bound = harder task.
             lo = np.minimum(half_angle_low_deg, half_angle_max)
             half_angle = np.random.uniform(lo, half_angle_max) * deg2rad
 
@@ -333,10 +319,7 @@ class SatDynEnv(gym.Env):
 
     def _rebuild_static(self):
         # Called once on plotter init and again on every episode reset because
-        # f_zone (avoid_vector_in_i, half_angle) is re-sampled each episode.
-
-        # Cone tip at avoid_vector_in_i * 0.9, base at origin — visualises the
-        # forbidden angular region the boresight must stay outside of.
+        
         koz_cone = pv.Cone(
             center=self.f_zone.avoid_vector_in_i * 0.45,
             direction=-self.f_zone.avoid_vector_in_i,
@@ -344,14 +327,12 @@ class SatDynEnv(gym.Env):
             height=0.9,
             resolution=80,
         )
-        # Small marker at the tip of the KOZ cone (the forbidden object direction).
+
         forbidden = pv.PlatonicSolid('dodecahedron')
         forbidden.scale([0.1, 0.1, 0.1], inplace=True)
         forbidden.translate(self.f_zone.avoid_vector_in_i * 0.9, inplace=True)
 
         # Goal: where the boresight must end up — rotate boresight_b into
-        # inertial frame using the desired attitude q_desired.
-        # scipy uses [x,y,z,w]; q_desired_array is [w,x,y,z].
         r_des = Rotation.from_quat([
             self.q_desired_array[1], self.q_desired_array[2],
             self.q_desired_array[3], self.q_desired_array[0],
@@ -359,8 +340,7 @@ class SatDynEnv(gym.Env):
         goal_dir = r_des.as_matrix() @ self.f_zone.boresight_vector_in_b
         goal_arrow = pv.Arrow(start=[0, 0, 0], direction=goal_dir, scale=0.3)
 
-        # copy_from() updates the VTK data buffer in-place so the plotter
-        # reflects the change without needing to re-add the actors.
+        # copy_from() updates the VTK data buffer
         self._koz_mesh.copy_from(koz_cone)
         self._forb_mesh.copy_from(forbidden)
         self._goal_mesh.copy_from(goal_arrow)
@@ -368,8 +348,6 @@ class SatDynEnv(gym.Env):
     def render(self):
         if self.render_mode is None:
             return
-        # att_err: total angle to desired attitude from quaternion scalar part
-        # state[0] = qe_0, state[4:7] = omega_e, state[7] = theta_margin, state[8] = theta
         err_deg = 2 * np.degrees(math.acos(np.clip(self.state[0], -1.0, 1.0)))
         print(
             f"step={self.steps:4d}  "
@@ -383,25 +361,18 @@ class SatDynEnv(gym.Env):
     def _pyvista_render(self):
         if self._pl is None:
 
-            # No DISPLAY → headless mode: render to PNG frames instead of a window.
-            # VTK_DEFAULT_EGL_DEVICE_INDEX (set in __init__) tells VTK to use GPU
-            # EGL rather than falling back to slow software Mesa rendering.
+            # No display: render to PNG frames instead of a window.
             self._off_screen = not bool(os.environ.get('DISPLAY'))
             if self._off_screen:
                 self._frame_dir = os.path.join(os.getcwd(), 'renders', 'spaceEnv')
                 os.makedirs(self._frame_dir, exist_ok=True)
 
-            # All meshes are empty PolyData placeholders. The plotter holds a
-            # reference to each object; copy_from() swaps the underlying VTK
-            # data buffer in-place so the actor updates without being re-added.
-            # allow_empty_mesh suppresses PyVista warnings on the first frame
-            # before the buffers are populated.
             pv.global_theme.allow_empty_mesh = True
             self._sat_mesh  = pv.PolyData()   # satellite body + solar panels (dynamic)
             self._bore_mesh = pv.PolyData()   # current boresight direction (dynamic)
-            self._koz_mesh  = pv.PolyData()   # KOZ cone (static per episode)
-            self._forb_mesh = pv.PolyData()   # forbidden-object marker (static per episode)
-            self._goal_mesh = pv.PolyData()   # target boresight direction (static per episode)
+            self._koz_mesh  = pv.PolyData()   # KOZ cone (static)
+            self._forb_mesh = pv.PolyData()   # forbidden-object marker (static)
+            self._goal_mesh = pv.PolyData()   # target boresight direction (static)
 
             self._pl = pv.Plotter(off_screen=self._off_screen)
             self._pl.add_axes()
@@ -413,10 +384,6 @@ class SatDynEnv(gym.Env):
             self._pl.add_legend()
             self._rebuild_static()
 
-            # Set up text overlay for theta and theta_margin.
-            # vtkTextActor is used directly because PyVista's add_text wrapper
-            # does not reliably support in-place updates via SetInput().
-            # The actor is registered after show() opens the window.
             self._info_text = vtkTextActor()
             self._info_text.GetPositionCoordinate().SetCoordinateSystemToNormalizedViewport()
             self._info_text.SetPosition(0.01, 0.80)
@@ -427,44 +394,29 @@ class SatDynEnv(gym.Env):
             if self._off_screen:
                 self._pl.show(auto_close=False)
             else:
-                # interactive_update=True makes show() non-blocking so the
-                # training loop can keep calling render() each step.
-                # auto_close=False prevents PyVista from destroying the window
-                # when show() returns — needed for reliable cross-version behaviour.
                 self._pl.show(interactive_update=True, auto_close=False, title="SatDynEnv live render")
-                # Orbit controls: trackball camera (LMB drag = orbit, wheel =
-                # zoom, MMB = pan) pivoting on the satellite at the origin.
-                # Events are pumped per frame via update() below — a plain
-                # render() never processes input, which left the camera locked.
                 self._pl.enable_trackball_style()
                 self._pl.camera.focal_point = (0.0, 0.0, 0.0)
                 try:
                     self._pl.add_camera_orientation_widget()
                 except Exception:
-                    pass  # older pyvista — orbit still works without the gizmo
+                    pass  
 
             self._pl.renderer.AddActor2D(self._info_text)
 
-        # --- dynamic geometry: rebuilt every step from current attitude ---
-
-        # state[:4] is the error quaternion q_e; compose with q_desired to get
-        # the absolute attitude in the inertial frame.
         q_abs = quaternion_multiply(self.q_desired_array, self.state[:4])
-        # scipy uses [x,y,z,w]; quaternion convention here is [w,x,y,z]
         r = Rotation.from_quat([q_abs[1], q_abs[2], q_abs[3], q_abs[0]])
         T = np.eye(4)
         T[:3, :3] = r.as_matrix()
         R = T[:3, :3]
 
-        # Satellite body (cube) + two solar panels, all in body frame,
-        # then rotated into the inertial frame by T.
+        # Satellite body (cube) + two solar panels, all in body frame
         body    = pv.Box(bounds=(-0.06,  0.06, -0.06,  0.06, -0.09,  0.09))
         panel_l = pv.Box(bounds=(-0.08,  0.08, -0.28, -0.07, -0.005, 0.005))
         panel_r = pv.Box(bounds=(-0.08,  0.08,  0.07,  0.28, -0.005, 0.005))
         sat = pv.merge([body, panel_l, panel_r])
         sat.transform(T, inplace=True)
 
-        # Boresight in inertial frame: rotate body-fixed instrument axis by q_abs.
         boresight_i     = R @ self.f_zone.boresight_vector_in_b
         boresight_arrow = pv.Arrow(start=[0, 0, 0], direction=boresight_i, scale=0.2)
 
@@ -486,8 +438,6 @@ class SatDynEnv(gym.Env):
                 os.path.join(self._frame_dir, f'frame_{self.steps:05d}.png')
             )
         else:
-            # update() pumps mouse/keyboard events AND redraws, so the user
-            # can orbit/zoom while the episode plays.
             self._pl.update()
 
     # ------------------------------------------------------------------
