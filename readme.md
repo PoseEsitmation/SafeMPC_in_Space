@@ -21,7 +21,6 @@ SafeMPC_in_Space/
 │   ├── hypercl/                  # hypernetwork (hnet/mnet)
 │   └── model/                    # dynamics model training
 ├── scripts/                      # analysis and batch-run helpers
-├── robosuite/                    # local fork of robosuite
 └── DOCS/                         # component and API definitions
 ```
 
@@ -76,8 +75,7 @@ python main.py run --method METHOD --env ENV
 | ------------------- | --------------------------------- |
 | `cartpole`          | Cartpole balancing                |
 | `half_cheetah_body` | Half-cheetah with body variations |
-| `pusher`            | Pusher manipulation task          |
-| `door_pose`         | Door opening task                 |
+| `half_cheetah_safe` | Half-cheetah with a keep-out zone enforced by the CBF/CLF safety filter |
 | `spaceEnv`          | Satellite attitude control with KOZ — 4 tasks varying difficulty and thruster strength |
 | `spaceEnv_moi`      | Satellite attitude control with KOZ — 4 tasks varying moment of inertia tensor        |
 

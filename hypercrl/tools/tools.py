@@ -693,8 +693,6 @@ class MonitorRL(MonitorBase):
                 rewards.append(reward)
             xs.append(x_tt)
             eprew = np.sum(rewards)
-            if self.hparams.env == "metaworld10":
-                print(f"Task {env.active_task}, Success {info['success']}")
             tdone = time.time() - ts
             return eprew, xs, us, tdone, koz_violations, min_theta_margin_deg, att_err_final_deg
 

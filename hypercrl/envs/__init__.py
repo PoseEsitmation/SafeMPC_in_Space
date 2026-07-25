@@ -1,11 +1,9 @@
 from gymnasium.envs.registration import register
-from .lqr import LQR_2DCar, LQR_HARD
 from .space_KOZ import SatDynEnv
 try:
     from .mujoco import *
 except Exception:
     pass
-import os
 
 register(
     id='MBRLCartpole-v0',
@@ -16,20 +14,6 @@ register(
 register(
     id='MBRLHalfCheetah-v0',
     entry_point='hypercrl.envs.half_cheetah:HalfCheetahEnv',
-    max_episode_steps=1000
-)
-
-register(
-    id='MBRLHopper-v0',
-    entry_point='hypercrl.envs.hopper:HopperEnv',
-    reward_threshold=None,
-    max_episode_steps=1000
-)
-
-register(
-    id='MBRLWalker-v0',
-    entry_point='hypercrl.envs.walker2d:Walker2dEnv',
-    reward_threshold=None,
     max_episode_steps=1000
 )
 
@@ -119,30 +103,4 @@ register(
     reward_threshold=None,
     max_episode_steps=200,
     kwargs=dict(length=0.5)
-)
-
-register(
-    id='SpaceEnv-v0',
-    entry_point='hypercrl.envs.sat_env:SatDynEnv',
-)
-
-register(
-    id='DoorLever-v0',
-    entry_point='hypercrl.envs.doorenv:DoorEnv',
-    max_episode_steps=500,
-    kwargs=dict(xml=os.path.dirname(os.path.realpath(__file__)) + '/assets/door/1551848929_lever_blue_right_v2_gripper_position.xml')
-)
-
-register(
-    id='DoorPull-v0',
-    entry_point='hypercrl.envs.doorenv:DoorEnv',
-    max_episode_steps=500,
-    kwargs=dict(xml=os.path.dirname(os.path.realpath(__file__)) + '/assets/door/1555111990_pull_blue_right_v2_gripper_position.xml')
-)
-
-register(
-    id='DoorRound-v0',
-    entry_point='hypercrl.envs.doorenv:DoorEnv',
-    max_episode_steps=500,
-    kwargs=dict(xml=os.path.dirname(os.path.realpath(__file__)) + '/assets/door/1558288438_round_blue_right_v2_gripper_position.xml')
 )
