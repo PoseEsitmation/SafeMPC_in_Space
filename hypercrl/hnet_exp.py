@@ -531,7 +531,17 @@ def _eval_nn_policy(
         f"  filter_frac={avg_filt_frac:.3f}  fallback_frac={avg_fb_frac:.3f}"
         f"  du_mean={avg_du_mean:.3f}  du_max={avg_du_max:.3f}"
     )
-    return {"koz": avg_koz, "reward": avg_reward, "filter_frac": avg_filt_frac}
+    return {
+        "koz": avg_koz,
+        "koz_max": max_koz,
+        "reward": avg_reward,
+        "filter_frac": avg_filt_frac,
+        "fallback_frac": avg_fb_frac,
+        "min_margin_deg": avg_min_margin,
+        "worst_margin_deg": worst_min_margin,
+        "att_err_deg": avg_att_err,
+        "n_eps": n_episodes,
+    }
 
 
 def _log_filter_success(writer, task_id: int, step: int, res_f: dict, res_u: dict) -> None:
@@ -559,6 +569,97 @@ def _log_filter_success(writer, task_id: int, step: int, res_f: dict, res_u: dic
     writer.add_scalar(f"dagger_eval/task_{task_id}/filter_success_rate", rate,  step)
     print(f"  [filter] prevented {saves:.1f} violation-steps/ep  "
           f"success_rate={rate:.0%}")
+
+
+def _eval_forgetting_matrix(nn_agent, logger, k: int, hparams) -> None:
+    """Backward-transfer / catastrophic-forgetting evaluation.
+
+    After finishing task ``k``, freeze the CURRENT distilled policy and
+    re-evaluate it on every task ``j <= k`` seen so far — once with the QP
+    safety filter enabled (filtered) and once with the raw policy (unfiltered).
+
+    Each cell of the matrix R[k][j] answers a different question:
+      * unfiltered KOZ violations on an OLD task j (j < k) that RISE as k grows
+        are the catastrophic-forgetting signal: the shared PolicyNet
+        (weights never reset — see PolicyTrainer.reset_per_task) is overwriting
+        the avoidance behaviour it learned on task j while distilling task k.
+      * filtered KOZ violations that stay ~0 for ALL (k, j) show the CBF/CLF
+        filter still guarantees safety on the forgotten task — the filter is a
+        non-learned component and cannot forget (this is the "safe" claim).
+      * filter_saves = unfiltered_koz - filtered_koz on old tasks quantifies how
+        much catastrophe the filter is actively preventing (the "useful" claim).
+
+    Both passes run in dedicated eval envs (logger.eval_envs), one per task,
+    each carrying its OWN CBF/CLF geometry — critical: task j's filter must use
+    task j's KOZ / thruster / inertia, not the just-trained task's.
+
+    Rows are appended (crash-safe) to ``forgetting_matrix.csv`` in the run dir
+    and mirrored to TensorBoard under ``forget/after_task_{k}/{filtered|
+    unfiltered}/task_{j}/*``.
+    """
+    import csv as _csv
+
+    n_f = getattr(hparams, "forget_eval_eps_filtered", 15)
+    n_u = getattr(hparams, "forget_eval_eps_unfiltered", 40)
+    condition = getattr(hparams, "cf_condition", "dagger")
+    seed = hparams.seed
+    csv_path = os.path.join(logger.tflog_dir, "forgetting_matrix.csv")
+    header = [
+        "seed", "condition", "after_task", "eval_task", "filter",
+        "koz_mean", "koz_max", "reward", "min_margin_deg", "worst_margin_deg",
+        "filter_frac", "fallback_frac", "att_err_deg", "n_eps",
+    ]
+    write_header = not os.path.exists(csv_path)
+
+    print(f"\n[forgetting] after task {k}: evaluating policy on tasks 0..{k} "
+          f"(filtered {n_f} eps, unfiltered {n_u} eps each)")
+
+    with open(csv_path, "a", newline="") as fh:
+        w = _csv.writer(fh)
+        if write_header:
+            w.writerow(header)
+
+        for j in range(k + 1):
+            eval_env = logger.eval_envs.get_env(j)
+            # Cache task j's OWN normalisation stats and geometry-specific
+            # filter (norms are frozen run-wide, but this stays correct if that
+            # ever changes; the filter object genuinely differs per task).
+            nn_agent.cache_state_norm(j)
+            if hasattr(eval_env, "get_safety_filter"):
+                nn_agent.set_safety_filter(eval_env.get_safety_filter())
+
+            res_f = _eval_nn_policy(
+                nn_agent, eval_env, j, logger.writer, k,
+                n_episodes=n_f,
+                tag_prefix=f"forget/after_task_{k}/filtered",
+                disable_filter=False,
+            )
+            res_u = _eval_nn_policy(
+                nn_agent, eval_env, j, logger.writer, k,
+                n_episodes=n_u,
+                tag_prefix=f"forget/after_task_{k}/unfiltered",
+                disable_filter=True,
+            )
+
+            for tag, res in (("filtered", res_f), ("unfiltered", res_u)):
+                w.writerow([
+                    seed, condition, k, j, tag,
+                    res["koz"], res["koz_max"], res["reward"],
+                    res["min_margin_deg"], res["worst_margin_deg"],
+                    res["filter_frac"], res["fallback_frac"],
+                    res["att_err_deg"], res["n_eps"],
+                ])
+
+            saves = max(res_u["koz"] - res_f["koz"], 0.0)
+            if logger.writer is not None:
+                logger.writer.add_scalar(
+                    f"forget/after_task_{k}/filter_saves/task_{j}", saves, k)
+            print(f"  [forget] eval task {j}: "
+                  f"unfilt_koz={res_u['koz']:.2f} filt_koz={res_f['koz']:.2f} "
+                  f"saves={saves:.2f}  unfilt_reward={res_u['reward']:.1f} "
+                  f"filt_reward={res_f['reward']:.1f}")
+
+    print(f"[forgetting] matrix rows appended -> {csv_path}\n")
 
 
 def run(hparams):
@@ -933,6 +1034,14 @@ def run(hparams):
             torch.save(policy_trainer.policy.state_dict(),
                        os.path.join(logger.model_dir, f"policy_{task_id}.pt"))
 
+        # Catastrophic-forgetting evaluation: re-test the frozen policy on all
+        # tasks 0..task_id (filtered + unfiltered) so the backward-transfer
+        # matrix captures how much the shared PolicyNet forgot — and how much
+        # of that the (non-learned) safety filter still catches.
+        if (getattr(hparams, "eval_forgetting", False)
+                and hparams.env.startswith("spaceEnv")):
+            _eval_forgetting_matrix(nn_agent, logger, task_id, hparams)
+
         # Save Model
         logger.save(task_id)
 
@@ -955,7 +1064,7 @@ def chunked_hnet(env, seed=None, savepath=None, play=False, render=False, run_na
 
 def hnet(env, seed=None, savepath=None, play=False, render=False, device="cpu",
          run_name=None, num_tasks=None, norms_path=None, fast_dagger=False,
-         fixed_scenario=False):
+         fixed_scenario=False, cf_experiment=False, no_dagger=False):
     # Hyperparameters
     hparams = HP(env, seed, savepath, run_name=run_name)
     hparams.model = "hnet"
@@ -966,6 +1075,17 @@ def hnet(env, seed=None, savepath=None, play=False, render=False, device="cpu",
     if norms_path is not None:
         hparams.norms_path = norms_path
     hparams.space_fixed_scenario = fixed_scenario
+
+    # Catastrophic-forgetting experiment (spaceEnv): run the full multi-task
+    # sequence and evaluate the frozen policy on all prior tasks at every task
+    # boundary (see _eval_forgetting_matrix).  --no-dagger gives the BC-only
+    # ablation condition (policy still distils the MPC expert every dynamics
+    # update, but no learner-state DAGGER rollouts are collected).
+    if cf_experiment:
+        hparams.eval_forgetting = True
+        hparams.cf_condition = "bc" if no_dagger else "dagger"
+    if no_dagger:
+        hparams.dagger_every = 0
 
     if fast_dagger:
         # Shortened single-task profile to answer "does DAGGER internalise

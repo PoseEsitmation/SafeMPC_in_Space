@@ -91,6 +91,8 @@ def run_hnet(args):
         norms_path=getattr(args, 'norms_path', None),
         fast_dagger=getattr(args, 'fast_dagger', False),
         fixed_scenario=getattr(args, 'fixed_scenario', False),
+        cf_experiment=getattr(args, 'cf_experiment', False),
+        no_dagger=getattr(args, 'no_dagger', False),
     )
 
 
@@ -271,6 +273,10 @@ def main():
                              help="Shortened single-task DAGGER-validation profile (~1.5h): 15k steps, 10 DAGGER iters, leaner rollouts/validation")
     run_parser.add_argument("--fixed-scenario", action="store_true", dest="fixed_scenario",
                              help="spaceEnv: pin the scenario geometry (init error 120-140°, KOZ half-angle 20°) — paper-equivalent fixed-corridor evaluation")
+    run_parser.add_argument("--cf-experiment", action="store_true", dest="cf_experiment",
+                             help="spaceEnv/hnet: catastrophic-forgetting experiment — evaluate the frozen policy on all prior tasks (filtered+unfiltered) at every task boundary, writing forgetting_matrix.csv")
+    run_parser.add_argument("--no-dagger", action="store_true", dest="no_dagger",
+                             help="BC-only ablation condition for --cf-experiment: disable DAGGER rollouts (dagger_every=0); the policy still distils the MPC expert every dynamics update")
 
     args = parser.parse_args()
 

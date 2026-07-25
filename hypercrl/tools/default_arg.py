@@ -147,6 +147,15 @@ def default_arg_policy(hparams):
     # so the buffer contains the learner's own failure states (0 = all
     # episodes follow the κ curriculum).
     hparams.dagger_student_frac = 0.0
+
+    # Catastrophic-forgetting evaluation (enabled by --cf-experiment).  At every
+    # task boundary the frozen policy is re-evaluated on all tasks seen so far,
+    # filtered and unfiltered, and a backward-transfer matrix is written to
+    # forgetting_matrix.csv — see hnet_exp._eval_forgetting_matrix.
+    hparams.eval_forgetting = False
+    hparams.cf_condition = "dagger"          # "dagger" or "bc" (ablation label)
+    hparams.forget_eval_eps_filtered = 15    # QP every step — kept modest
+    hparams.forget_eval_eps_unfiltered = 40  # raw policy — nearly free
     return hparams
 
 
