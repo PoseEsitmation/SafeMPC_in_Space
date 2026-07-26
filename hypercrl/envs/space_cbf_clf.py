@@ -102,7 +102,8 @@ class SpaceAttitudeCBF(CBF):
     # untrained policy) but floors the intervention RATE at ~2% — the
     # reliance-declines-to-zero result needs 0.5 (paper_final: 8.6%→0.00%).
     # KEEP IN SYNC with the torch factories in control/policy_net.py
-    # (training loss must match the runtime filter).
+    # (training loss must match the runtime filter).  Numeric parity between
+    # the two is checked by tests/test_cbf_clf_parity.py.
     def __init__(self, env, gamma: float = 0.5) -> None:
         self._env   = env
         self.gamma  = gamma
