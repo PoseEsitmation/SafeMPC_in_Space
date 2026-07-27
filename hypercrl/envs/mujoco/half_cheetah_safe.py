@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Callable, List, Optional, Tuple
 
 import cvxpy as cp
 import mujoco
 import numpy as np
+import torch
 import gymnasium as gym
 from gymnasium import utils
 from gymnasium.envs.mujoco import mujoco_env
@@ -121,6 +122,83 @@ class HalfCheetahKeepOutCBF(CBF):
         else:
             # Ḣ_R ≈  (s @ u) + alpha * x_vel
             return (s @ u_var) + self.alpha * x_vel
+
+
+def make_cheetah_cbf_fn(
+    zones: List[Tuple[float, float]],
+    x_mu: torch.Tensor,
+    x_std: torch.Tensor,
+    a_mu: torch.Tensor,
+    a_std: torch.Tensor,
+    alpha: float = 1.0,
+    x_accel_gain: float = 0.5,
+) -> Callable:
+    """Torch-differentiable batched version of HalfCheetahKeepOutCBF.H_dot_expr.
+
+    Used by the CBF term of the imitation loss, so it takes the states the
+    PolicyTrainer stores: preprocessed and collector-normalised.  Layout after
+    preprocessing (19 dims):
+        [0]  z_pos
+        [1]  cos(root_angle)
+        [2]  sin(root_angle)
+        [3-8] joint angles
+        [9]  qvel[0]  ← global x-velocity  (what the CBF needs)
+        [10-17] remaining velocities
+        [18] x_pos   ← global x-position   (what the CBF needs)
+
+    Both x_vel and x_pos are further normalised by (x_mu, x_std); the action
+    is normalised by (a_mu, a_std).  This factory captures those statistics so
+    the returned fn can denormalise on the fly.
+
+    H_dot (linear in u, as in HalfCheetahKeepOutCBF.H_dot_expr):
+        left  approach: -(s @ u_phys) - alpha * x_vel
+        right approach:  (s @ u_phys) + alpha * x_vel
+    where s = x_accel_gain / n_actions (uniform sensitivity).
+    """
+    # Flatten: finalize() stores norms as (1, dim) after .T — index into dim axis.
+    x_mu_f = x_mu.flatten()
+    x_std_f = x_std.flatten()
+    xvel_mu  = float(x_mu_f[9])
+    xvel_std = float(x_std_f[9])
+    xpos_mu  = float(x_mu_f[18])
+    xpos_std = float(x_std_f[18])
+
+    def cbf_fn(state_norm: torch.Tensor, action_norm: torch.Tensor) -> torch.Tensor:
+        dev = state_norm.device
+
+        # Denormalise the two quantities the CBF depends on.
+        x_vel = state_norm[:, 9]  * xvel_std + xvel_mu   # global x-velocity
+        x_pos = state_norm[:, 18] * xpos_std + xpos_mu   # global x-position
+
+        # Denormalise action to physical space (a_mu/a_std are (1,n_act) — flatten to (n_act,)).
+        u_phys = action_norm * a_std.flatten().to(dev) + a_mu.flatten().to(dev)
+
+        n_act = u_phys.shape[1]
+        s     = x_accel_gain / n_act
+        s_u   = s * u_phys.sum(dim=1)          # s @ u  (uniform s)
+
+        h_dot_left  = -s_u - alpha * x_vel
+        h_dot_right =  s_u + alpha * x_vel
+
+        min_h_dot = torch.full_like(x_vel, float("inf"))
+        for x_min, x_max in zones:
+            x_min_t = torch.tensor(x_min, dtype=x_vel.dtype, device=dev)
+            x_max_t = torch.tensor(x_max, dtype=x_vel.dtype, device=dev)
+
+            on_left  = (x_pos <= x_min_t).float()
+            on_right = (x_pos >= x_max_t).float()
+            in_zone  = 1.0 - on_left - on_right
+
+            h_dot = (
+                on_left  * h_dot_left
+                + on_right * h_dot_right
+                + in_zone  * torch.minimum(h_dot_left, h_dot_right)
+            )
+            min_h_dot = torch.minimum(min_h_dot, h_dot)
+
+        return min_h_dot   # positive ⇒ constraint met; negative ⇒ violation
+
+    return cbf_fn
 
 
 class HalfCheetahSafeEnv(mujoco_env.MujocoEnv, utils.EzPickle):

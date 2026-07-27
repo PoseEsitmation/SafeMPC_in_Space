@@ -14,12 +14,13 @@ from hypercrl.tools import reset_seed, str_to_act
 from hypercrl.tools import MonitorHnet, HP, Hparams
 from hypercrl.control import RandomAgent, MPC, SafeAgent, SafetyFilter
 from hypercrl.control.agent import NNPolicyAgent
-from hypercrl.control.policy_net import (PolicyNet, PolicyTrainer,
-                                          make_cheetah_cbf_fn, make_space_cbf_fn,
-                                          make_space_clf_fn, make_space_margin_fn,
-                                          make_space_boundary_sampler,
-                                          make_space_cbf_feasible_fn)
+from hypercrl.control.policy_net import PolicyNet, PolicyTrainer
+from hypercrl.envs.space_cbf_clf import (make_space_cbf_fn, make_space_clf_fn,
+                                         make_space_margin_fn,
+                                         make_space_boundary_sampler,
+                                         make_space_cbf_feasible_fn)
 from hypercrl.control.agent import _preprocess_state_torch
+from hypercrl.envs.mujoco.half_cheetah_safe import make_cheetah_cbf_fn
 from hypercrl.envs.cl_env import CLEnvHandler
 from hypercrl.dataset.datautil import DataCollector
 
@@ -613,11 +614,17 @@ def run(hparams):
         # Collect some random data
         collector = DataCollector(hparams)
 
-        # Reuse the fixed normaliser of a previous run (norms.pt saved next to
-        # its TensorBoard logs): every task in this run is then normalised
-        # with exactly the same affine transform as that run.
+        # Reuse a fixed normaliser (assets/spaceEnv_norms.pt by default, or any
+        # norms.pt saved next to a previous run's TensorBoard logs): every task
+        # in this run is then normalised with exactly the same affine transform
+        # as that run.  "none" opts out — stats are then estimated from this
+        # run's own random phase and frozen at the end of it.
         norms_path = getattr(hparams, "norms_path", None)
-        if norms_path:
+        if norms_path and str(norms_path).lower() != "none":
+            if not os.path.isfile(norms_path):
+                raise FileNotFoundError(
+                    f"--norms-path: no normalisation stats at '{norms_path}' "
+                    f"(pass --norms-path none to estimate them from this run)")
             payload = torch.load(norms_path, weights_only=True)
             collector.load_frozen_norms(payload["norms"], payload.get("diff_norms"))
             print(f"[norms] loaded frozen normalisation stats from {norms_path}")
@@ -706,16 +713,18 @@ def run(hparams):
         # From here on the normalised coordinate system is fixed for the whole
         # run: normalised buffers/closures can never go stale and the hnet sees
         # one stationary input distribution across tasks.  For later tasks the
-        # call only assigns the already-frozen stats.  Saved to the run dir so
-        # other runs can reuse the exact same transform via hparams.norms_path.
+        # call only assigns the already-frozen stats.  Always saved to the run
+        # dir — including when they came from --norms-path — so a run directory
+        # records the exact transform it used and stays reusable on its own.
         if getattr(hparams, "freeze_norms", False) and hparams.normalize_xu:
             was_frozen = collector.frozen
             collector.freeze_norms(task_id)
-            if not was_frozen:
-                norms_file = os.path.join(logger.tflog_dir, "norms.pt")
+            norms_file = os.path.join(logger.tflog_dir, "norms.pt")
+            if not os.path.exists(norms_file):
                 torch.save({"norms": collector._frozen_norms,
                             "diff_norms": collector._frozen_diff_norms}, norms_file)
-                print(f"[norms] frozen normalisation stats (task {task_id}) -> {norms_file}")
+                origin = "loaded" if was_frozen else f"frozen (task {task_id})"
+                print(f"[norms] {origin} normalisation stats -> {norms_file}")
 
         # Augment Model, instantiate optimizers/regularizer targets
         trainer_misc = augment_model(task_id, mnet, hnet, collector, hparams)

@@ -1,4 +1,13 @@
+import os
+
 import torch
+
+# Frozen normalisation statistics shipped with the repo (exported from run
+# baseline_27).  Used as the default --norms-path for every spaceEnv variant so
+# separate runs share one coordinate system out of the box; see readme.md.
+# Absolute so the default survives being launched from another directory.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SPACE_NORMS_PATH = os.path.join(_REPO_ROOT, "assets", "spaceEnv_norms.pt")
 
 
 class Hparams():
@@ -428,6 +437,12 @@ def default_arg_sat(hparams):
     # Stats are saved as norms.pt in the run dir; reuse them in another run
     # with --norms-path to get identical coordinates across runs.
     hparams.freeze_norms = True
+    # Default to the stats shipped in assets/ rather than re-estimating them
+    # from this run's random phase: results stay comparable across runs (and
+    # against the recorded baselines), and a norms.pt exported later is a
+    # byte-for-byte match.  Override with --norms-path PATH, or estimate fresh
+    # stats from this run's own random phase with --norms-path none.
+    hparams.norms_path = SPACE_NORMS_PATH
     hparams.h_dims = [256, 256]
     hparams.out_var = False
 

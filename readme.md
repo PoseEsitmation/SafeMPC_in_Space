@@ -16,10 +16,12 @@ SafeMPC_in_Space/
 ├── play.py                       # checkpoint replayer
 ├── hypercrl/
 │   ├── envs/space_KOZ.py         # satellite attitude env with KOZ
+│   ├── envs/space_cbf_clf.py     # satellite CBF/CLF (QP + training-loss form)
 │   ├── control/safety_filter.py  # CBF/CLF-QP filter
 │   ├── control/agent.py          # MPC agent
 │   ├── hypercl/                  # hypernetwork (hnet/mnet)
 │   └── model/                    # dynamics model training
+├── assets/spaceEnv_norms.pt      # default frozen normalisation stats (spaceEnv)
 ├── scripts/                      # analysis and batch-run helpers
 └── DOCS/                         # component and API definitions
 ```
@@ -52,6 +54,39 @@ python main.py run --method METHOD --env ENV
 | `--savepath`  | no       | Path to save logs/checkpoints                             |
 | `--rendering` | no       | Show the simulation window during training                |
 | `--play`      | no       | Reload a saved checkpoint and replay the agent            |
+| `--name`      | no       | Name suffix for the run directory                         |
+| `--num-tasks` | no       | Override the number of continual-learning tasks           |
+| `--norms-path`| no       | Frozen normalisation stats to run in (see below)          |
+| `--fast-dagger` | no     | Shortened single-task DAGGER-validation profile (~1.5 h)  |
+| `--fixed-scenario` | no  | `spaceEnv`: pin the scenario geometry (init error 120–140°, KOZ half-angle 20°) |
+
+### Normalisation stats (`--norms-path`)
+
+States and actions are normalised before they reach the dynamics model, the
+policy and the CBF/CLF loss terms. Those statistics are **frozen** for a whole
+run, so one fixed coordinate system applies to every task — normalised DAGGER
+buffers and CBF/CLF closures cannot go stale, and the hypernetwork sees a
+stationary input distribution across tasks.
+
+`spaceEnv` and `spaceEnv_moi` load `assets/spaceEnv_norms.pt` by default
+(exported from run `baseline_27`). Every run therefore starts in the same
+coordinate system, which keeps runs comparable with each other and with the
+recorded baselines instead of each re-estimating slightly different stats from
+its own random phase.
+
+```bash
+# Default: reuse the stats shipped in assets/
+python main.py run --method hnet --env spaceEnv
+
+# Reuse the stats of a specific earlier run
+python main.py run --method hnet --env spaceEnv --norms-path ./runs/space/<run>/norms.pt
+
+# Opt out: estimate fresh stats from this run's own random phase
+python main.py run --method hnet --env spaceEnv --norms-path none
+```
+
+Either way the stats in force are written to `norms.pt` in the run directory,
+so a run stays reproducible from its own outputs.
 
 ### Methods
 
