@@ -65,6 +65,7 @@ _SIN_GUARD = 0.05
 _SCALE_TORQUE = 2.0        # [Nm] max torque per axis
 _SCALE_OMEGA  = 5.0        # [rad/s] obs normalisation factor
 _U_MAX        = _SCALE_TORQUE * math.sqrt(3.0)   # max torque L2-norm
+_B_NOMINAL    = np.eye(3) * _SCALE_TORQUE        # tau = B @ u
 _BORESIGHT_B  = np.array([1.0, 0.0, 0.0])        # fixed instrument axis in body
 
 # Class-K multiplier α(H) = γ·H, shared by the QP filter and the training loss
@@ -121,6 +122,8 @@ class SpaceAttitudeCBF(CBF):
         self.gamma  = gamma
         self._I     = env.inertia.astype(float)
         self._I_inv = np.linalg.inv(self._I)
+        self._B     = env.B
+        self._u_max = env.u_max_torque
 
     # ------------------------------------------------------------------
     # Helpers
@@ -173,7 +176,7 @@ class SpaceAttitudeCBF(CBF):
     def H(self, obs: np.ndarray) -> float:
         """Extended barrier value H(x) = h + |ḣ|·ḣ / (2·u_max)  [Eq. 6]."""
         th_marg, h_dot, _, _, _, _ = self._kinematics(obs)
-        return th_marg + abs(h_dot) * h_dot / (2.0 * _U_MAX)
+        return th_marg + abs(h_dot) * h_dot / (2.0 * self._u_max)
 
     def H_dot_expr(self, obs: np.ndarray, u_var: cp.Variable) -> cp.Expression:
         """CVXPY expression for Ḣ(x,u) + γ·H(x)  [Eq. 7 + class-K condition].
@@ -182,11 +185,11 @@ class SpaceAttitudeCBF(CBF):
         """
         th_marg, h_dot, c_perp, sin_t, omega, av_b = self._kinematics(obs)
 
-        H_val  = th_marg + abs(h_dot) * h_dot / (2.0 * _U_MAX)
+        H_val  = th_marg + abs(h_dot) * h_dot / (2.0 * self._u_max)
 
-        # Linear-in-u part of ḧ: −(I⁻¹·c_perp)·tau/sin θ,  tau = u·scale_torque
+        # Linear-in-u part of ḧ: −(Bᵀ I⁻¹ c_perp)/sin θ,  tau = B u
         if sin_t > _SIN_GUARD:
-            g_h_dot_dot = -(self._I_inv @ c_perp) * _SCALE_TORQUE / sin_t
+            g_h_dot_dot = -(self._B.T @ (self._I_inv @ c_perp)) / sin_t
         else:
             g_h_dot_dot = np.zeros(3)
 
@@ -197,8 +200,8 @@ class SpaceAttitudeCBF(CBF):
         # Ḣ(x,u) = h_dot + |h_dot| * (f_hdd + g_hdd·u) / u_max
         # Ḣ + γ·H = const + linear_in_u
         abs_hd = abs(h_dot)
-        const_part  = h_dot + abs_hd * f_h_dot_dot / _U_MAX + self.gamma * H_val
-        linear_part = abs_hd / _U_MAX * g_h_dot_dot   # (3,) coefficient vector
+        const_part  = h_dot + abs_hd * f_h_dot_dot / self._u_max + self.gamma * H_val
+        linear_part = abs_hd / self._u_max * g_h_dot_dot   # (3,) coefficient vector
 
         return const_part + linear_part @ u_var
 
@@ -236,6 +239,7 @@ class SpaceAttitudeCLF(CLF):
         self.c        = c
         self._I     = env.inertia.astype(float)
         self._I_inv = np.linalg.inv(self._I)
+        self._B     = env.B
 
     def _unpack(self, obs: np.ndarray):
         q_e, omega, _, _, _ = _denorm_obs(obs)
@@ -274,8 +278,8 @@ class SpaceAttitudeCLF(CLF):
             + self.c_w * 2.0 * float(np.dot(omega, omega_dot_f))
         )
 
-        # Control gain: LgV·u = c_w·2·ω^T·I⁻¹·u·scale_torque
-        g_clf = self.c_w * 2.0 * _SCALE_TORQUE * (self._I_inv.T @ omega)  # (3,)
+        # Control gain: LgV·u = c_w·2·ω^T·I⁻¹·B·u
+        g_clf = self.c_w * 2.0 * (self._B.T @ (self._I_inv.T @ omega))  # (3,)
 
         V_val = self.c_q * float(np.dot(q_e_vec, q_e_vec)) + self.c_w * float(np.dot(omega, omega))
         zeta  = self._zeta(q_e0, q_e_vec, omega)
@@ -306,6 +310,8 @@ def make_space_cbf_components(
     x_std: torch.Tensor,
     inertia,               # (3,3) array-like
     gamma: float = _GAMMA,
+    B=_B_NOMINAL,
+    u_max_torque: float = _U_MAX,
 ) -> Callable:
     """Affine decomposition of the CBF condition for SatDynEnv (Eq. 5-7).
 
@@ -326,6 +332,7 @@ def make_space_cbf_components(
     I_np     = np.array(inertia, dtype=np.float64)
     I_t      = torch.tensor(I_np,                  dtype=torch.float32)
     I_inv_t  = torch.tensor(np.linalg.inv(I_np),   dtype=torch.float32)
+    B_t      = torch.tensor(np.asarray(B),         dtype=torch.float32)
     _bore    = torch.tensor(_BORESIGHT_B,          dtype=torch.float32)
 
     x_mu_f = x_mu.flatten()
@@ -335,6 +342,7 @@ def make_space_cbf_components(
         dev  = state_norm.device
         I    = I_t.to(dev)
         Ii   = I_inv_t.to(dev)
+        Bm   = B_t.to(dev)
         bore = _bore.to(dev).unsqueeze(0)          # (1, 3)
 
         # Undo collector normalisation → env-normalised obs
@@ -371,7 +379,7 @@ def make_space_cbf_components(
         h     = h.squeeze(1)                                            # (B,)
 
         # H(x) = h + |ḣ|·ḣ / (2·U_MAX)
-        H_val = h + h_dot.abs() * h_dot / (2.0 * _U_MAX)              # (B,)
+        H_val = h + h_dot.abs() * h_dot / (2.0 * u_max_torque)        # (B,)
 
         # Drift: ω_dot_f = I⁻¹(−ω × Iω)
         Iw           = omega @ I.T                                      # (B, 3)
@@ -385,14 +393,13 @@ def make_space_cbf_components(
         hdd_drift = -num / sin_t - h_dot * cos_t * h_dot / sin_t         # (B,)
         hdd_drift = torch.where(valid, hdd_drift, torch.zeros_like(hdd_drift))
 
-        # ḧ linear-in-u coefficient: g = −(I⁻¹ c_perp)·τ_scale / sinθ
-        # Physical torque = u_raw * _SCALE_TORQUE, so g already absorbs τ_scale.
-        g_hdd = -(c_perp @ Ii.T) * _SCALE_TORQUE / sin_t.unsqueeze(1)  # (B, 3)
+        # ḧ linear-in-u coefficient: g = −(Bᵀ I⁻¹ c_perp) / sinθ
+        g_hdd = -((c_perp @ Ii.T) @ Bm) / sin_t.unsqueeze(1)           # (B, 3)
         g_hdd = torch.where(valid.unsqueeze(1), g_hdd, torch.zeros_like(g_hdd))
 
         # condition = ḣ + |ḣ|/U·ḧ_drift + γH  +  (|ḣ|/U·g)·u_raw
-        c0 = h_dot + h_dot.abs() / _U_MAX * hdd_drift + gamma * H_val   # (B,)
-        b  = (h_dot.abs() / _U_MAX).unsqueeze(1) * g_hdd                # (B, 3)
+        c0 = h_dot + h_dot.abs() / u_max_torque * hdd_drift + gamma * H_val   # (B,)
+        b  = (h_dot.abs() / u_max_torque).unsqueeze(1) * g_hdd                # (B, 3)
         return c0, b
 
     return components
@@ -405,6 +412,8 @@ def make_space_cbf_fn(
     a_std: torch.Tensor,
     inertia,               # (3,3) array-like
     gamma: float = _GAMMA,
+    B=_B_NOMINAL,
+    u_max_torque: float = _U_MAX,
 ) -> Callable:
     """Differentiable H_dot(x,u) + γH(x) for SatDynEnv (paper Eq. 5-7).
 
@@ -414,7 +423,7 @@ def make_space_cbf_fn(
 
     Thin wrapper over make_space_cbf_components (condition is affine in u).
     """
-    components = make_space_cbf_components(x_mu, x_std, inertia, gamma)
+    components = make_space_cbf_components(x_mu, x_std, inertia, gamma, B, u_max_torque)
     a_mu_f, a_std_f = a_mu.flatten(), a_std.flatten()
 
     def cbf_fn(state_norm: torch.Tensor, action_norm: torch.Tensor) -> torch.Tensor:
@@ -432,6 +441,8 @@ def make_space_cbf_feasible_fn(
     inertia,
     gamma: float = _GAMMA,
     eps: float = 0.0,
+    B=_B_NOMINAL,
+    u_max_torque: float = _U_MAX,
 ) -> Callable:
     """Control-feasibility mask: can ANY action in [-1,1]³ reach the margin?
 
@@ -441,7 +452,7 @@ def make_space_cbf_feasible_fn(
     penalty — no gradient can fix them, they only inflate the loss floor
     (baseline_34: cbf_synth_viol_frac pinned at ~0.6).
     """
-    components = make_space_cbf_components(x_mu, x_std, inertia, gamma)
+    components = make_space_cbf_components(x_mu, x_std, inertia, gamma, B, u_max_torque)
 
     def feasible_fn(state_norm: torch.Tensor) -> torch.Tensor:
         with torch.no_grad():
@@ -532,6 +543,7 @@ def make_space_clf_fn(
     j: float = 5.0,        # keep in sync with SpaceAttitudeCLF defaults
     c: float = 0.6,        # midpoint [rad]: ζ≈ζ_min beyond ~60° attitude error
     scale_omega: float = _SCALE_OMEGA,
+    B=_B_NOMINAL,
 ) -> Callable:
     """Differentiable V_dot(x,u) + ζ(x)V(x) for SatDynEnv (paper Eq. 11-13).
 
@@ -544,6 +556,7 @@ def make_space_clf_fn(
     I_np    = np.array(inertia, dtype=np.float64)
     I_t     = torch.tensor(I_np,                dtype=torch.float32)
     I_inv_t = torch.tensor(np.linalg.inv(I_np), dtype=torch.float32)
+    B_t     = torch.tensor(np.asarray(B),       dtype=torch.float32)
 
     x_mu_f = x_mu.flatten()
     x_std_f = x_std.flatten()
@@ -554,6 +567,7 @@ def make_space_clf_fn(
         dev = state_norm.device
         I   = I_t.to(dev)
         Ii  = I_inv_t.to(dev)
+        Bm  = B_t.to(dev)
 
         # Undo collector normalisation → env-normalised obs
         obs = state_norm * x_std_f.to(dev) + x_mu_f.to(dev)
@@ -579,8 +593,8 @@ def make_space_clf_fn(
             + c_w * 2.0 * (omega * omega_dot_f).sum(dim=1)
         )                                                                # (B,)
 
-        # LgV = c_w·2·τ_scale·(I⁻¹ᵀ ω)  — coefficient for u_raw ∈ [-1,1]³
-        LgV = c_w * 2.0 * _SCALE_TORQUE * (omega @ Ii)                 # (B, 3)
+        # LgV = c_w·2·Bᵀ I⁻ᵀ ω  — coefficient for u_raw ∈ [-1,1]³
+        LgV = c_w * 2.0 * ((omega @ Ii) @ Bm)                          # (B, 3)
 
         # ζ(x) from Eq. 13
         att_err = 2.0 * torch.acos(q_e0.clamp(-1.0 + 1e-7, 1.0 - 1e-7))  # (B,)

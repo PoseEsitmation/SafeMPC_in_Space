@@ -59,6 +59,9 @@ python main.py run --method METHOD --env ENV
 | `--norms-path`| no       | Frozen normalisation stats to run in (see below)          |
 | `--fast-dagger` | no     | Shortened single-task DAGGER-validation profile (~1.5 h)  |
 | `--fixed-scenario` | no  | `spaceEnv`: pin the scenario geometry (init error 120–140°, KOZ half-angle 20°) |
+| `--cf-experiment` | no   | Evaluate the policy on all prior tasks at every task boundary (`forgetting_matrix.csv`) |
+| `--no-dagger` | no       | BC-only ablation: disable DAGGER rollouts                 |
+| `--cl-profile` | no      | Shorter per-task profile for continual-learning runs (~1.3 h/task) |
 
 ### Normalisation stats (`--norms-path`)
 
@@ -111,17 +114,22 @@ so a run stays reproducible from its own outputs.
 | `cartpole`          | Cartpole balancing                |
 | `half_cheetah_body` | Half-cheetah with body variations |
 | `half_cheetah_safe` | Half-cheetah with a keep-out zone enforced by the CBF/CLF safety filter |
-| `spaceEnv`          | Satellite attitude control with KOZ — 4 tasks varying difficulty and thruster strength |
+| `spaceEnv`          | Satellite attitude control with KOZ — 4 tasks varying scenario difficulty |
 | `spaceEnv_moi`      | Satellite attitude control with KOZ — 4 tasks varying moment of inertia tensor        |
+| `spaceEnv_thruster` | Satellite attitude control with KOZ — 5 tasks with thruster faults |
+| `spaceEnv_null`     | 4 identical tasks — control for forgetting experiments |
+
+All `spaceEnv*` tasks are defined in `hypercrl/envs/space_tasks.py`. Body torque is
+`tau = B @ u`; thruster faults change `B`, which the CBF/CLF filter uses as well.
 
 **`spaceEnv` tasks:**
 
 | Task | Name | What varies |
 |------|------|-------------|
-| 0 | default | 80–180° initial error, full torque (2 Nm), standard KOZ penalty |
+| 0 | default | 80–180° initial error, standard KOZ penalty |
 | 1 | easy | 10–45° initial error |
 | 2 | hard | 90–180° initial error + 5× stronger KOZ penalty |
-| 3 | weak | Half thruster power (1 Nm) |
+| 3 | tight_koz | Wider keep-out cone (25–40° half-angle) |
 
 **`spaceEnv_moi` tasks:**
 
@@ -131,6 +139,16 @@ so a run stays reproducible from its own outputs.
 | 1 | Nearly symmetric, small satellite | `(20, 22, 25)` |
 | 2 | Heavy asymmetric, large satellite | `(120, 90, 150)` |
 | 3 | Oblate flat-disk shape | `(80, 80, 20)` |
+
+**`spaceEnv_thruster` tasks** (per-axis thruster health, 1.0 = healthy):
+
+| Task | Name | Actuator |
+|------|------|----------|
+| 0 | nominal | `(1, 1, 1)` |
+| 1 | roll_degraded | `(0.35, 1, 1)` |
+| 2 | yaw_near_dead | `(1, 1, 0.15)` |
+| 3 | double_fault | `(0.5, 0.15, 1)` |
+| 4 | misaligned | cross-coupled `B` |
 
 ### Examples
 
@@ -259,7 +277,7 @@ On solver failure it falls back to `u_proposed` and logs a warning.
 The filter is geometry-agnostic — the env owns the CBF/CLF objects.
 
 ## Test
-python -m pytest -s tests/test_cbf_clf_filter.py -v
+python -m pytest tests/ -v
 
 ## References
 

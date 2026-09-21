@@ -532,7 +532,10 @@ def _eval_nn_policy(
         f"  filter_frac={avg_filt_frac:.3f}  fallback_frac={avg_fb_frac:.3f}"
         f"  du_mean={avg_du_mean:.3f}  du_max={avg_du_max:.3f}"
     )
-    return {"koz": avg_koz, "reward": avg_reward, "filter_frac": avg_filt_frac}
+    return {"koz": avg_koz, "koz_max": max_koz, "reward": avg_reward,
+            "filter_frac": avg_filt_frac, "fallback_frac": avg_fb_frac,
+            "min_margin_deg": avg_min_margin, "worst_margin_deg": worst_min_margin,
+            "att_err_deg": avg_att_err, "n_eps": n_episodes}
 
 
 def _log_filter_success(writer, task_id: int, step: int, res_f: dict, res_u: dict) -> None:
@@ -562,6 +565,37 @@ def _log_filter_success(writer, task_id: int, step: int, res_f: dict, res_u: dic
           f"success_rate={rate:.0%}")
 
 
+def _eval_forgetting_matrix(nn_agent, logger, k, hparams):
+    """After task k, evaluate the frozen policy on every task j <= k, filtered and
+    unfiltered, appending one row per cell to forgetting_matrix.csv."""
+    import csv
+    from hypercrl.envs.space_tasks import get_task_spec
+
+    path = os.path.join(logger.tflog_dir, "forgetting_matrix.csv")
+    write_header = not os.path.exists(path)
+    with open(path, "a", newline="") as fh:
+        w = csv.writer(fh)
+        if write_header:
+            w.writerow(["seed", "env", "condition", "after_task", "eval_task", "filter",
+                        "task_name", "koz_mean", "koz_max", "reward", "min_margin_deg",
+                        "worst_margin_deg", "filter_frac", "fallback_frac",
+                        "att_err_deg", "n_eps"])
+        for j in range(k + 1):
+            env = logger.eval_envs.get_env(j)
+            nn_agent.cache_state_norm(j)
+            nn_agent.set_safety_filter(env.get_safety_filter())
+            for tag, n_eps in (("filtered", hparams.forget_eval_eps_filtered),
+                               ("unfiltered", hparams.forget_eval_eps_unfiltered)):
+                r = _eval_nn_policy(nn_agent, env, j, logger.writer, k, n_episodes=n_eps,
+                                    tag_prefix=f"forget/after_task_{k}/{tag}",
+                                    disable_filter=(tag == "unfiltered"))
+                w.writerow([hparams.seed, hparams.env, hparams.cf_condition, k, j, tag,
+                            get_task_spec(hparams.env, j).name,
+                            r["koz"], r["koz_max"], r["reward"], r["min_margin_deg"],
+                            r["worst_margin_deg"], r["filter_frac"], r["fallback_frac"],
+                            r["att_err_deg"], r["n_eps"]])
+
+
 def run(hparams):
 
     print("[DEBUG run] ENTRY:", hparams.device)
@@ -573,21 +607,18 @@ def run(hparams):
     # boresight).  This mirrors the paper's single fixed CR scenario, where
     # raw-policy avoidance is learnable; the fully randomised default asks
     # the network to generalise planner-like across arbitrary geometries.
-    # SatDynEnv.reset() reads these module globals at call time.
+    # Only geometry is pinned; plant and actuator still follow the task family.
     if getattr(hparams, "space_fixed_scenario", False) \
             and hparams.env.startswith("spaceEnv"):
-        import hypercrl.envs.space_KOZ as _sk
-        _sk.angle_bound_lower  = 120
-        _sk.angle_bound_upper  = 140
-        _sk.half_angle_low_deg  = 20.0
-        _sk.half_angle_high_deg = 20.0
+        from hypercrl.envs.space_tasks import set_scenario_override
         # Offset the cone centre 10° off the start→goal arc: still blocks the
         # direct path (half-angle 20°) but one detour side is clearly shorter,
         # so the expert's avoidance is unimodal — plain MSE imitation of a
         # symmetric cone averages the left/right detour modes into a
         # through-the-cone trajectory.
-        _sk.vector_rotation_angle2_low  = 10.0
-        _sk.vector_rotation_angle2_high = 10.0
+        set_scenario_override(angle_bound_lower=120.0, angle_bound_upper=140.0,
+                              half_angle_low_deg=20.0, half_angle_high_deg=20.0,
+                              cone_offset_deg=10.0)
         print("[env] fixed scenario: init error 120-140°, KOZ half-angle 20°, "
               "cone offset 10° (unimodal detour)")
 
@@ -756,9 +787,10 @@ def run(hparams):
                         x_mu, x_std, a_mu, a_std = collector.norm(task_id)
                         _raw_env = env.unwrapped if hasattr(env, 'unwrapped') else env
                         policy_trainer.cbf_fn = make_space_cbf_fn(
-                            x_mu, x_std, a_mu, a_std, _raw_env.inertia)
+                            x_mu, x_std, a_mu, a_std, _raw_env.inertia,
+                            B=_raw_env.B, u_max_torque=_raw_env.u_max_torque)
                         policy_trainer.clf_fn = make_space_clf_fn(
-                            x_mu, x_std, a_mu, a_std, _raw_env.inertia)
+                            x_mu, x_std, a_mu, a_std, _raw_env.inertia, B=_raw_env.B)
                         # θ-margin extractor for safety-prioritised sampling
                         policy_trainer.margin_fn = make_space_margin_fn(x_mu, x_std)
                         # Synthetic KOZ-corridor states for the CBF penalty —
@@ -770,7 +802,8 @@ def run(hparams):
                         # penalty (baseline_34: viol frac pinned at ~0.6).
                         policy_trainer.cbf_feasible_fn = make_space_cbf_feasible_fn(
                             x_mu, x_std, _raw_env.inertia,
-                            eps=getattr(hparams, "policy_cbf_eps_train", 0.0))
+                            eps=getattr(hparams, "policy_cbf_eps_train", 0.0),
+                            B=_raw_env.B, u_max_torque=_raw_env.u_max_torque)
 
                 # Train NN policy — wait until MPC has collected meaningful data.
                 # Use the combined dataset (BC base + DAGGER expert buffer) so
@@ -942,6 +975,9 @@ def run(hparams):
             torch.save(policy_trainer.policy.state_dict(),
                        os.path.join(logger.model_dir, f"policy_{task_id}.pt"))
 
+        if hparams.eval_forgetting and hparams.env.startswith("spaceEnv"):
+            _eval_forgetting_matrix(nn_agent, logger, task_id, hparams)
+
         # Save Model
         logger.save(task_id)
 
@@ -964,7 +1000,8 @@ def chunked_hnet(env, seed=None, savepath=None, play=False, render=False, run_na
 
 def hnet(env, seed=None, savepath=None, play=False, render=False, device="cpu",
          run_name=None, num_tasks=None, norms_path=None, fast_dagger=False,
-         fixed_scenario=False):
+         fixed_scenario=False, cf_experiment=False, no_dagger=False,
+         cl_profile=False):
     # Hyperparameters
     hparams = HP(env, seed, savepath, run_name=run_name)
     hparams.model = "hnet"
@@ -975,6 +1012,19 @@ def hnet(env, seed=None, savepath=None, play=False, render=False, device="cpu",
     if norms_path is not None:
         hparams.norms_path = norms_path
     hparams.space_fixed_scenario = fixed_scenario
+
+    if cl_profile:
+        # Shorter tasks and leaner per-round validation (~1.3 h/task instead of ~3.4 h).
+        hparams.max_iteration = 12000
+        hparams.dagger_n_iter = (hparams.max_iteration
+                                 - hparams.policy_train_start) // hparams.dagger_every
+        hparams.dagger_val_eps_filtered = 4
+        hparams.dagger_val_eps_unfiltered = 10
+    if cf_experiment:
+        hparams.eval_forgetting = True
+        hparams.cf_condition = "bc" if no_dagger else "dagger"
+    if no_dagger:
+        hparams.dagger_every = 0
 
     if fast_dagger:
         # Shortened single-task profile to answer "does DAGGER internalise

@@ -54,6 +54,9 @@ def run_hnet(args):
         norms_path=getattr(args, 'norms_path', None),
         fast_dagger=getattr(args, 'fast_dagger', False),
         fixed_scenario=getattr(args, 'fixed_scenario', False),
+        cf_experiment=getattr(args, 'cf_experiment', False),
+        no_dagger=getattr(args, 'no_dagger', False),
+        cl_profile=getattr(args, 'cl_profile', False),
     )
 
 
@@ -218,6 +221,12 @@ def main():
                              help="Shortened single-task DAGGER-validation profile (~1.5h): 15k steps, 10 DAGGER iters, leaner rollouts/validation")
     run_parser.add_argument("--fixed-scenario", action="store_true", dest="fixed_scenario",
                              help="spaceEnv: pin the scenario geometry (init error 120-140°, KOZ half-angle 20°) — paper-equivalent fixed-corridor evaluation")
+    run_parser.add_argument("--cf-experiment", action="store_true", dest="cf_experiment",
+                             help="Evaluate the policy on all prior tasks at every task boundary (forgetting_matrix.csv)")
+    run_parser.add_argument("--no-dagger", action="store_true", dest="no_dagger",
+                             help="BC-only ablation: disable DAGGER rollouts")
+    run_parser.add_argument("--cl-profile", action="store_true", dest="cl_profile",
+                             help="Shorter per-task profile for continual-learning runs (~1.3 h/task)")
 
     args = parser.parse_args()
 

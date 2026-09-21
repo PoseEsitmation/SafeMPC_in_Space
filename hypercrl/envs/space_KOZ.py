@@ -1,6 +1,6 @@
 # Satellite attitude control env with Keep-Out Zone.
 # State (13,): [qe(4), omega_e(3), theta_margin(1), theta(1), rel_avoid_in_b(3), qe_0_prev(1)]
-# Action (3,): normalised torques in [-1, 1], scaled by scale_torque [Nm]
+# Action (3,): normalised commands in [-1, 1]; body torque = B @ u
 
 import math
 import os
@@ -16,6 +16,7 @@ from vtkmodules.vtkRenderingCore import vtkTextActor
 from .subfunctions_att_constraints import KeepOutZone
 from .subfunctions_att_constraints import generate_avoid_vector_in_i_for_1Fzone_phase1_v2
 from .space_cbf_clf import SpaceAttitudeCBF, SpaceAttitudeCLF
+from .space_tasks import max_torque
 from hypercrl.control.safety_filter import SafetyFilter
 
 deg2rad = np.pi / 180
@@ -32,19 +33,9 @@ boresight_vector_in_b_global = np.array([1.0, 0.0, 0.0])      # instrument axis 
 time_per_step    = 0.1    
 time_per_episode = 100    
 
-# initial attitude error bounds [deg]
-angle_bound_lower = 80
-angle_bound_upper = 180
-
-# KOZ half-angle sampling bounds [deg]
-half_angle_low_deg = 15.0
-half_angle_high_deg = 30.0
-
 # KOZ placement parameters (exponential-map method)
 vector_rotation_angle1_ratio_low  = 0.5
 vector_rotation_angle1_ratio_high = 0.5
-vector_rotation_angle2_low  = 0.0   # [deg]
-vector_rotation_angle2_high = 0.0   # [deg]
 
 # math helpers
 
@@ -100,11 +91,11 @@ def sat_ode(state, inertia, inertia_inv, torque):
 
     return np.concatenate((q_dot, omega_dot))
 
-@njit
-def random_unit_quat_with_angle_bound(lower_deg, upper_deg):
-    e = np.random.randn(3)
+# Not @njit: numba's RNG ignores the env seed.
+def random_unit_quat_with_angle_bound(rng, lower_deg, upper_deg):
+    e = rng.standard_normal(3)
     e /= np.linalg.norm(e)
-    theta = np.random.uniform(lower_deg, upper_deg) * np.pi / 180
+    theta = rng.uniform(lower_deg, upper_deg) * np.pi / 180
     q = np.array([
         np.cos(theta / 2),
         e[0] * np.sin(theta / 2),
@@ -115,15 +106,14 @@ def random_unit_quat_with_angle_bound(lower_deg, upper_deg):
         q = -q
     return q
 
-@njit
-def random_angular_rate(rate_bound=0.0):
-    return np.random.uniform(low=-rate_bound, high=rate_bound, size=3)
+def random_angular_rate(rng, rate_bound=0.0):
+    return rng.uniform(low=-rate_bound, high=rate_bound, size=3)
 
 # reward function
 
-def reward_function_with_Fzone(state, action):
-    if not hasattr(reward_function_with_Fzone, 'action_prev'):
-        reward_function_with_Fzone.action_prev = action.copy()
+def reward_function_with_Fzone(state, action, B, beta, alpha, action_prev=None):
+    if action_prev is None:
+        action_prev = action
 
     qe_0_current = state[0]
     qe_0_prev    = state[-1]
@@ -131,13 +121,11 @@ def reward_function_with_Fzone(state, action):
     err_phi_current = 2 * math.acos(np.clip(qe_0_current, -1.0, 1.0))
     err_phi_prev    = 2 * math.acos(np.clip(qe_0_prev,    -1.0, 1.0))
 
-    torque        = action * scale_torque
-    torque_change = np.linalg.norm(action - reward_function_with_Fzone.action_prev) * scale_torque
-    reward_function_with_Fzone.action_prev = action.copy()
+    torque        = B @ action
+    torque_change = np.linalg.norm(B @ (action - action_prev))
 
     # full penalty inside KOZ
     theta_margin = state[7]
-    beta, alpha  = 10, 66
     if theta_margin <= 0:
         penalty_f_zone = beta
     else:
@@ -164,14 +152,24 @@ class SatDynEnv(gym.Env):
 
     def __init__(self, angle_bound_lower=80, angle_bound_upper=180,
              beta=10, alpha=66, scale_torque=2,
+             thruster_health=(1.0, 1.0, 1.0), allocation=None,
+             half_angle_low_deg=15.0, half_angle_high_deg=30.0, cone_offset_deg=0.0,
              time_per_episode=100, time_per_step=0.1, inertia=None,
              render_mode=None):
         super().__init__()
         self._angle_bound_lower = angle_bound_lower  # initial attitude error range [deg]
         self._angle_bound_upper = angle_bound_upper
+        self._half_angle_low_deg  = half_angle_low_deg   # KOZ half-angle range [deg]
+        self._half_angle_high_deg = half_angle_high_deg
+        self._cone_offset_deg     = cone_offset_deg      # KOZ offset off the slew arc [deg]
         self._beta              = beta               # KOZ violation penalty magnitude
         self._alpha             = alpha              # KOZ penalty decay rate near boundary
-        self._scale_torque      = scale_torque       # max thruster torque per axis [Nm]
+
+        # tau = B @ u; a thruster fault changes B, and with it the CBF/CLF control terms
+        if allocation is None:
+            allocation = np.diag(thruster_health) * scale_torque
+        self.B = np.asarray(allocation, dtype=np.float64)
+        self.u_max_torque = max_torque(self.B)
 
         self.action_space = spaces.Box(low=-1, high=1, shape=(3,), dtype=np.float32)
         self.observation_space = spaces.Box(
@@ -205,15 +203,19 @@ class SatDynEnv(gym.Env):
         self.state = np.zeros(13, dtype=np.float32)
         self.reset()
 
+    def seed(self, seed=None):
+        super().reset(seed=seed)
+        return [seed]
+
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
 
-        if hasattr(reward_function_with_Fzone, 'action_prev'):
-            del reward_function_with_Fzone.action_prev
+        self._action_prev = None
+        rng = self.np_random
 
-        q_e_initial  = random_unit_quat_with_angle_bound(angle_bound_lower, angle_bound_upper)
-        omega_initial = random_angular_rate(rate_bound=1.0e-3 * np.pi / 180)
+        q_e_initial  = random_unit_quat_with_angle_bound(rng, self._angle_bound_lower, self._angle_bound_upper)
+        omega_initial = random_angular_rate(rng, rate_bound=1.0e-3 * np.pi / 180)
 
         q_abs_initial = quaternion_multiply(self.q_desired_array, q_e_initial)
 
@@ -227,8 +229,8 @@ class SatDynEnv(gym.Env):
             self.q_desired_array, quaternion_multiply(boresight_b_quat, quaternion_conj(self.q_desired_array))
         )
 
-        ratio1 = np.random.uniform(vector_rotation_angle1_ratio_low, vector_rotation_angle1_ratio_high)
-        angle2 = np.random.uniform(vector_rotation_angle2_low, vector_rotation_angle2_high)
+        ratio1 = rng.uniform(vector_rotation_angle1_ratio_low, vector_rotation_angle1_ratio_high)
+        angle2 = self._cone_offset_deg
 
         avoid_vec_i, half_angle_max = generate_avoid_vector_in_i_for_1Fzone_phase1_v2(
             boresight_b,
@@ -238,14 +240,15 @@ class SatDynEnv(gym.Env):
             q_e_initial,
             ratio1,
             angle2,
+            half_angle_low_deg=self._half_angle_low_deg,
         )
 
         if half_angle_max == 0.0:
             half_angle = 0.0
         else:
-            half_angle_max = np.minimum(half_angle_max, half_angle_high_deg)
-            lo = np.minimum(half_angle_low_deg, half_angle_max)
-            half_angle = np.random.uniform(lo, half_angle_max) * deg2rad
+            half_angle_max = np.minimum(half_angle_max, self._half_angle_high_deg)
+            lo = np.minimum(self._half_angle_low_deg, half_angle_max)
+            half_angle = rng.uniform(lo, half_angle_max) * deg2rad
 
         self.f_zone = KeepOutZone(boresight_b, avoid_vec_i, half_angle)
 
@@ -281,7 +284,7 @@ class SatDynEnv(gym.Env):
         qe_0_prev    = self.state[0]
 
         # RK4 integration
-        torque = action * scale_torque
+        torque = (self.B @ action).astype(np.float32)
         f1 = self.dt * sat_ode(self.state[:7], self.inertia, inertia_inv, torque)
         f2 = self.dt * sat_ode(self.state[:7] + 0.5*f1, self.inertia, inertia_inv, torque)
         f3 = self.dt * sat_ode(self.state[:7] + 0.5*f2, self.inertia, inertia_inv, torque)
@@ -309,7 +312,9 @@ class SatDynEnv(gym.Env):
         self.state[9:12] = rel_avoid_b
         self.state[12]   = qe_0_prev
 
-        reward = reward_function_with_Fzone(self.state, action)
+        reward = reward_function_with_Fzone(self.state, action, self.B, self._beta,
+                                            self._alpha, self._action_prev)
+        self._action_prev = action.copy()
 
         self.steps += 1
         done = self.steps >= self.max_steps

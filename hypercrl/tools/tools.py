@@ -363,7 +363,7 @@ class MonitorRL(MonitorBase):
         self._min_theta_margin_deg = float('inf')  # worst margin this episode
         self._att_err_final_deg = float('nan')     # attitude error at last step
 
-        self.eval_envs = CLEnvHandler(hparams.env, hparams.seed)
+        self.eval_envs = CLEnvHandler(hparams.env, hparams.seed, seed_offset=500_000)
         for task_id in range(hparams.num_tasks):
             self.eval_envs.add_task(task_id, render=False)
 

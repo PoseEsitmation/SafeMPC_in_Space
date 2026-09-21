@@ -124,7 +124,7 @@ def generate_avoid_vector_in_i_for_1Fzone_phase1(boresight_vector_in_i_initial, 
 
     return avoid_vector_in_i_quat[1:4], half_angle_high
 
-def generate_avoid_vector_in_i_for_1Fzone_phase1_v2(boresight_vector_in_b, boresight_vector_in_i_initial, boresight_vector_in_i_desired, q_initial, q_e_initial, vector_rotation_angle1_ratio, vector_rotation_angle2):
+def generate_avoid_vector_in_i_for_1Fzone_phase1_v2(boresight_vector_in_b, boresight_vector_in_i_initial, boresight_vector_in_i_desired, q_initial, q_e_initial, vector_rotation_angle1_ratio, vector_rotation_angle2, half_angle_low_deg=15.0):
    
     # The F-zone is located directly on the rotation path
     q_e_initial_conj = quaternion_conj(q_e_initial)     
@@ -158,7 +158,7 @@ def generate_avoid_vector_in_i_for_1Fzone_phase1_v2(boresight_vector_in_b, bores
     theta_2 = np.acos(np.inner(boresight_vector_in_i_desired, avoid_vector_in_i_quat[1:4])) * 180/np.pi
     min_theta = min(theta_1, theta_2)  
 
-    if min_theta < (15.0 + 2.0):
+    if min_theta < (half_angle_low_deg + 2.0):
         half_angle_high = 0.0         
     else:
         half_angle_high = min_theta - 2.0    

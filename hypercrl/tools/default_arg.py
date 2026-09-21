@@ -156,6 +156,11 @@ def default_arg_policy(hparams):
     # so the buffer contains the learner's own failure states (0 = all
     # episodes follow the κ curriculum).
     hparams.dagger_student_frac = 0.0
+    # Forgetting matrix at every task boundary (--cf-experiment).
+    hparams.eval_forgetting = False
+    hparams.cf_condition = "dagger"
+    hparams.forget_eval_eps_filtered = 15
+    hparams.forget_eval_eps_unfiltered = 40
     return hparams
 
 

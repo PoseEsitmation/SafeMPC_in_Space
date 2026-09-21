@@ -3,6 +3,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 from gymnasium.wrappers import TimeLimit
 from hypercrl.envs.mujoco.half_cheetah_safe import HalfCheetahSafeEnv
+from hypercrl.envs.space_tasks import FAMILIES as SPACE_FAMILIES, get_task_spec
 
 # Per-task gravity rotations for the half_cheetah (body/gravity) continual tasks.
 Rots = [[0, 0, 0], [0, 10, 0], [0, 20, 0], [0, 30, 0],
@@ -24,20 +25,6 @@ CARTPOLE_ENVS = ['MBRLCartpole-v0', 'CartpoleLong1-v0', 'CartpoleShort1-v0',
 CARTPOLE_BIN_ENVS = ['MBRLCartpole-v0',
                      'CartpoleLeft1-v0', 'CartpoleRight1-v0']
 
-SPACE_ENV_PRESETS = [
-    {},                                                                                    # Task 0 — default: large starting error (80–180°), full torque, standard KOZ penalty
-    {"angle_bound_lower": 10,  "angle_bound_upper": 45},                                  # Task 1 — easy: small starting error (10–45°)
-    {"angle_bound_lower": 90,  "angle_bound_upper": 180, "beta": 50, "alpha": 100},       # Task 2 — hard: large starting error + 5x stronger KOZ penalty
-    {"scale_torque": 0.5},                                                                 # Task 3 — weak: half thruster power (0.5 Nm)
-]
-
-SPACE_MOI_ENVS = [
-    {"inertia": [[60, 5, 1], [5, 50, 2], [1, 2, 70]]},       # Task 0 — baseline asymmetric (current default)
-    {"inertia": [[20, 1, 0], [1, 22, 0], [0, 0, 25]]},        # Task 1 — nearly symmetric, small satellite
-    {"inertia": [[120, 10, 3], [10, 90, 5], [3, 5, 150]]},    # Task 2 — heavy asymmetric, large satellite
-    {"inertia": [[80, 2, 0], [2, 80, 0], [0, 0, 20]]},        # Task 3 — oblate (flat disk shape)
-]
-
 
 class EnvSpecs():
     a_dims = {
@@ -46,8 +33,7 @@ class EnvSpecs():
         "half_cheetah_safe": 6,
         "cartpole": 1,
         "cartpole_bin": 1,
-        "spaceEnv": 3,
-        "spaceEnv_moi": 3,
+        **{name: 3 for name in SPACE_FAMILIES},
     }
 
     x_dims = {
@@ -56,8 +42,7 @@ class EnvSpecs():
         "half_cheetah_safe": 19,
         "cartpole": 4,
         "cartpole_bin": 4,
-        "spaceEnv": 13,
-        "spaceEnv_moi": 13,
+        **{name: 13 for name in SPACE_FAMILIES},
     }
 
     @classmethod
@@ -70,9 +55,10 @@ class EnvSpecs():
 
 
 class CLEnvHandler():
-    def __init__(self, env, seed):
+    def __init__(self, env, seed, seed_offset=0):
         self.cl_env = env
         self.seed = seed
+        self.seed_offset = seed_offset  # separates e.g. training and eval envs
 
         self._envs = []
 
@@ -98,19 +84,15 @@ class CLEnvHandler():
         elif self.cl_env == "cartpole":
             env = gym.make(CARTPOLE_ENVS[task_id],
                            render_mode="human" if render else None)
-        elif self.cl_env == "spaceEnv_moi":
+        elif self.cl_env in SPACE_FAMILIES:
             from .space_KOZ import SatDynEnv
-            env = SatDynEnv(**SPACE_MOI_ENVS[task_id],
-                            render_mode="human" if render else None)
-        elif self.cl_env == "spaceEnv":
-            from .space_KOZ import SatDynEnv
-            env = SatDynEnv(**SPACE_ENV_PRESETS[task_id],
+            env = SatDynEnv(**get_task_spec(self.cl_env, task_id).env_kwargs(),
                             render_mode="human" if render else None)
         else:
             raise ValueError(f"Unknown environment: {self.cl_env}")
 
-        if hasattr(env, 'seed'):
-            env.seed(self.seed)
+        if hasattr(env, 'seed') and self.seed is not None:
+            env.seed(self.seed + 7919 * task_id + self.seed_offset)
 
         if not replica:
             self._envs.append(env)
@@ -138,8 +120,6 @@ class CLEnvHandler():
             desc["gym_id"] = CHEETAH_ENVS[task_id] if task_id < len(CHEETAH_ENVS) else None
         elif env_name == "half_cheetah_safe":
             desc["keep_out_zones"] = str(HALF_CHEETAH_SAFE_ENVS[task_id]) if task_id < len(HALF_CHEETAH_SAFE_ENVS) else None
-        elif env_name == "spaceEnv_moi":
-            desc["params"] = SPACE_MOI_ENVS[task_id] if task_id < len(SPACE_MOI_ENVS) else {}
-        elif env_name.startswith("spaceEnv"):
-            desc["params"] = SPACE_ENV_PRESETS[task_id] if task_id < len(SPACE_ENV_PRESETS) else {}
+        elif env_name in SPACE_FAMILIES:
+            desc["params"] = get_task_spec(env_name, task_id).summary()
         return desc
