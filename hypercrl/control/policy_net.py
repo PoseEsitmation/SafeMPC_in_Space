@@ -57,10 +57,16 @@ class PolicyNet(nn.Module):
         action_dim: int,
         hidden_dims: tuple = (256, 256, 256, 256),
         dropout: float = 0.1,
+        n_tasks: int = 0,
     ) -> None:
         super().__init__()
 
-        dims = [state_dim, *hidden_dims]
+        # n_tasks > 0 appends a one-hot task id to the input.  Needed when the
+        # policy trains on several tasks at once (expert replay): a faulted
+        # thruster needs a different action at the same state, so without the
+        # task id the replayed tasks are averaged together.
+        self.n_tasks = n_tasks
+        dims = [state_dim + n_tasks, *hidden_dims]
         layers: list[nn.Module] = []
         for in_d, out_d in zip(dims[:-1], dims[1:]):
             layers += [nn.Linear(in_d, out_d), nn.LayerNorm(out_d), nn.ReLU()]
@@ -71,7 +77,16 @@ class PolicyNet(nn.Module):
 
         self.net = nn.Sequential(*layers)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, task_id=None) -> torch.Tensor:
+        if self.n_tasks:
+            if task_id is None:
+                raise ValueError("task-conditioned PolicyNet requires task_id")
+            if torch.is_tensor(task_id) and task_id.dim() == 2:
+                onehot = task_id.to(x)                      # already one-hot rows
+            else:
+                onehot = torch.zeros(x.shape[0], self.n_tasks, dtype=x.dtype, device=x.device)
+                onehot[:, int(task_id)] = 1.0
+            x = torch.cat([x, onehot], dim=1)
         return self.net(x)
 
 
@@ -195,6 +210,48 @@ class PolicyTrainer:
         # _dag_states/_dag_actions_phys.
         self._dag_filter_active: list = []
 
+        # Expert replay: {task_id: (states_norm, actions_norm)} for finished
+        # tasks, relabelled by the MPC expert through the hypernetwork's
+        # weights for that task.  Survives reset_per_task by design.
+        self.n_tasks = getattr(policy, "n_tasks", 0)
+        self.replay_n = getattr(hparams, "policy_replay_n", 256)
+        self._replay: dict = {}
+
+    def _onehot(self, task_id: int, n_rows: int) -> torch.Tensor:
+        oh = torch.zeros(n_rows, max(self.n_tasks, 1))
+        oh[:, int(task_id)] = 1.0
+        return oh
+
+    def refresh_replay(self, mpc_agent, collector, task_id: int, env_for_task) -> None:
+        """Relabel stored states of every finished task with the MPC expert.
+
+        The expert plans with the hypernetwork's weights for that task, so the
+        labels are only correct if the hypernetwork still remembers it — which
+        is exactly the property under test.  States come from the collector, so
+        nothing is simulated in the old environment.
+        """
+        for j in range(task_id):
+            x_all, _ = collector.get_dataset(j)
+            x_all = x_all.tensors[0]
+            idx = torch.randperm(x_all.shape[0])[: self.replay_n]
+            x_norm = x_all[idx]
+
+            x_mu, x_std, a_mu, a_std = collector.norm(j)
+            x_raw = x_norm * x_std.flatten().cpu() + x_mu.flatten().cpu()
+
+            mpc_agent.cache_hnet(j)
+            env_j = env_for_task(j)
+            if hasattr(env_j, "get_safety_filter"):
+                mpc_agent.set_safety_filter(env_j.get_safety_filter())
+            acts = []
+            for row in x_raw:
+                u = mpc_agent.act(row.numpy(), task_id=j).detach().cpu().flatten()
+                acts.append(u)
+            u_phys = torch.stack(acts)
+            u_norm = (u_phys - a_mu.flatten().cpu()) / a_std.flatten().cpu()
+            self._replay[j] = (x_norm, u_norm)
+            logger.info("replay: task %d relabelled (%d states)", j, x_norm.shape[0])
+
     # ------------------------------------------------------------------
 
     def reset_per_task(self) -> None:
@@ -226,29 +283,29 @@ class PolicyTrainer:
         """
         from torch.utils.data import TensorDataset as _TDS
         base = dynamics_train_set
-        if not self._dag_states:
-            return base, self._sample_weights(base.tensors[0], tags=None)
+        dyn_x, dyn_u = base.tensors[0], base.tensors[1]
 
-        dag_x = torch.cat(self._dag_states, dim=0)             # (Nd, proc_dim)
-        dag_u = torch.stack(self._dag_actions_phys, dim=0)     # (Nd, act_dim)
+        # Row order matters: _sample_weights tags the LAST len(tags) rows as the
+        # DAGGER buffer, so replayed rows go first and DAGGER rows stay last.
+        xs, us, ts = [], [], []
+        for j, (rx, ru) in sorted(self._replay.items()):
+            xs.append(rx); us.append(ru); ts.append(self._onehot(j, rx.shape[0]))
+        xs.append(dyn_x); us.append(dyn_u); ts.append(self._onehot(task_id, dyn_x.shape[0]))
 
-        try:
-            _, _, a_mu, a_std = collector.norm(task_id)
-            dag_u = (dag_u - a_mu.flatten().to(dag_u.dtype)) \
-                / a_std.flatten().to(dag_u.dtype)
-        except (KeyError, AttributeError, TypeError):
-            pass  # no norms (normalize_xu=False) — physical labels match the base
+        tags = None
+        if self._dag_states:
+            dag_x = torch.cat(self._dag_states, dim=0)             # (Nd, proc_dim)
+            dag_u = torch.stack(self._dag_actions_phys, dim=0)     # (Nd, act_dim)
+            try:
+                _, _, a_mu, a_std = collector.norm(task_id)
+                dag_u = (dag_u - a_mu.flatten().to(dag_u.dtype)) \
+                    / a_std.flatten().to(dag_u.dtype)
+            except (KeyError, AttributeError, TypeError):
+                pass  # no norms (normalize_xu=False) — physical labels match the base
+            xs.append(dag_x); us.append(dag_u); ts.append(self._onehot(task_id, dag_x.shape[0]))
+            tags = torch.tensor(self._dag_filter_active, dtype=torch.float32)
 
-        dyn_x, dyn_u, dyn_xtt = base.tensors
-        Nd = dag_x.shape[0]
-        dag_dummy = torch.zeros(Nd, dyn_xtt.shape[1])
-
-        dataset = _TDS(
-            torch.cat([dyn_x, dag_x],       dim=0),
-            torch.cat([dyn_u, dag_u],       dim=0),
-            torch.cat([dyn_xtt, dag_dummy], dim=0),
-        )
-        tags = torch.tensor(self._dag_filter_active, dtype=torch.float32)
+        dataset = _TDS(torch.cat(xs, dim=0), torch.cat(us, dim=0), torch.cat(ts, dim=0))
         return dataset, self._sample_weights(dataset.tensors[0], tags=tags)
 
     def _sample_weights(self, x_all: torch.Tensor,
@@ -283,7 +340,7 @@ class PolicyTrainer:
 
     # ------------------------------------------------------------------
 
-    def train(self, dataset, writer=None, sample_weights=None) -> float:
+    def train(self, dataset, writer=None, sample_weights=None, task_id=0) -> float:
         """Run one training phase; return mean total loss.
 
         sample_weights:
@@ -321,11 +378,17 @@ class PolicyTrainer:
                 it = iter(loader)
                 batch = next(it)
 
-            x, u_expert, _ = batch
+            x, u_expert, tid = batch
             x        = x.to(self.device)
             u_expert = u_expert.to(self.device)
+            tid      = tid.to(self.device)
 
-            u_pred = self.policy(x)
+            u_pred = self.policy(x, task_id=tid)
+
+            # The CBF/CLF terms below are built for ONE task's actuator, so
+            # they may only score rows of the task currently being trained.
+            cur = (tid.argmax(dim=1) == task_id) if self.n_tasks else torch.ones(
+                x.shape[0], dtype=torch.bool, device=x.device)
 
             with torch.no_grad():
                 u_pred_norm_max   = max(u_pred_norm_max,   float(u_pred.abs().max()))
@@ -353,8 +416,8 @@ class PolicyTrainer:
             cbf_viol_frac = torch.zeros(1)
             cbf_mean_margin = torch.zeros(1)
             cbf_synth_viol_frac = torch.zeros(1)
-            if self.cbf_fn is not None and self.lambda_cbf > 0.0:
-                h_dot = self.cbf_fn(x, u_pred)
+            if self.cbf_fn is not None and self.lambda_cbf > 0.0 and cur.any():
+                h_dot = self.cbf_fn(x[cur], u_pred[cur])
                 loss_cbf = torch.mean(torch.clamp(self.cbf_eps_train - h_dot, min=0.0) ** 2)
                 loss = loss + self.lambda_cbf * loss_cbf
                 with torch.no_grad():
@@ -366,14 +429,14 @@ class PolicyTrainer:
                 # policy's own action at the synthetic state is penalised, no
                 # expert label involved.
                 if self.boundary_sampler is not None:
-                    x_bnd = self.boundary_sampler(x)
+                    x_bnd = self.boundary_sampler(x[cur])
                     # Keep only control-feasible states — infeasible ones
                     # (ḣ≈0 near the boundary) have no gradient through u and
                     # pin the loss/viol-frac at a floor (baseline_34: ~0.6).
                     if self.cbf_feasible_fn is not None:
                         x_bnd = x_bnd[self.cbf_feasible_fn(x_bnd)]
                     if x_bnd.shape[0] > 0:
-                        u_bnd = self.policy(x_bnd)
+                        u_bnd = self.policy(x_bnd, task_id=task_id)
                         h_dot_bnd = self.cbf_fn(x_bnd, u_bnd)
                         loss_cbf_bnd = torch.mean(
                             torch.clamp(self.cbf_eps_train - h_dot_bnd, min=0.0) ** 2)
@@ -390,8 +453,8 @@ class PolicyTrainer:
 
             # --- CLF loss (Eq. 17) ---
             clf_viol_frac = torch.zeros(1)
-            if self.clf_fn is not None and self.lambda_clf > 0.0:
-                v_dot = self.clf_fn(x, u_pred)
+            if self.clf_fn is not None and self.lambda_clf > 0.0 and cur.any():
+                v_dot = self.clf_fn(x[cur], u_pred[cur])
                 loss_clf = torch.mean(torch.clamp(v_dot, min=0.0) ** 2)
                 loss = loss + self.lambda_clf * loss_clf
                 with torch.no_grad():
@@ -548,7 +611,7 @@ class PolicyTrainer:
                 # NN action: preprocess+normalised state → linear output
                 with torch.no_grad():
                     x_proc = preprocess_fn(obs)                    # (1, proc_dim)
-                    u_nn_t = self.policy(x_proc)                   # (1, action_dim)
+                    u_nn_t = self.policy(x_proc, task_id=task_id)  # (1, action_dim)
                 u_nn = u_nn_t.cpu().numpy().flatten()
 
                 # Denormalise NN output to physical space; clip before mixing

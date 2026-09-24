@@ -456,7 +456,7 @@ class NNPolicyAgent(Agent):
         self.policy.eval()
         with torch.no_grad():
             # (action_dim,), normalised space, unbounded linear
-            u = self.policy(x).squeeze(0)
+            u = self.policy(x, task_id=task_id).squeeze(0)
 
         # 4. denormalise action back to physical space and clip to env bounds.
         # Without the clip, an unbounded linear policy head can produce extreme

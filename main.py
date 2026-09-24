@@ -57,6 +57,8 @@ def run_hnet(args):
         cf_experiment=getattr(args, 'cf_experiment', False),
         no_dagger=getattr(args, 'no_dagger', False),
         cl_profile=getattr(args, 'cl_profile', False),
+        no_hnet_reg=getattr(args, 'no_hnet_reg', False),
+        replay=getattr(args, 'replay', False),
     )
 
 
@@ -225,6 +227,10 @@ def main():
                              help="Evaluate the policy on all prior tasks at every task boundary (forgetting_matrix.csv)")
     run_parser.add_argument("--no-dagger", action="store_true", dest="no_dagger",
                              help="BC-only ablation: disable DAGGER rollouts")
+    run_parser.add_argument("--replay", action="store_true", dest="replay",
+                             help="Expert replay: relabel stored old-task states with the MPC expert through the hypernetwork, and train the (task-conditioned) policy on them")
+    run_parser.add_argument("--no-hnet-reg", action="store_true", dest="no_hnet_reg",
+                             help="Ablation arm: same hypernetwork, continual-learning regulariser off (beta=0)")
     run_parser.add_argument("--cl-profile", action="store_true", dest="cl_profile",
                              help="Shorter per-task profile for continual-learning runs (~1.3 h/task)")
 

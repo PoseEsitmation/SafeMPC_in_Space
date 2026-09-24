@@ -444,6 +444,8 @@ def _eval_nn_policy(
     all_du_max        = []
     all_min_margin    = []
     all_att_err       = []
+    all_goal_steps    = []
+    all_att_err_mean  = []
 
     saved_filter = getattr(nn_agent, "safety_filter", None)
     if disable_filter:
@@ -463,6 +465,8 @@ def _eval_nn_policy(
             du_norms     = []
             min_margin   = float("inf")
             att_err_final = float("nan")
+            goal_steps   = 0
+            att_err_sum  = 0.0
 
             while not done:
                 u = nn_agent.act(x_t, task_id=task_id).detach().cpu().numpy()
@@ -487,6 +491,8 @@ def _eval_nn_policy(
                 min_margin = min(min_margin, float(theta_margin_deg))
                 att_err_final = 2 * np.degrees(
                     np.arccos(np.clip(np.abs(x_tt[0]), 0.0, 1.0)))
+                goal_steps  += att_err_final <= 0.25   # where the +9/step bonus pays
+                att_err_sum += att_err_final
                 x_t = x_tt
 
             all_rewards.append(ep_reward)
@@ -495,6 +501,8 @@ def _eval_nn_policy(
             all_fallback_frac.append(n_fallback / max(n_steps, 1))
             all_min_margin.append(min_margin)
             all_att_err.append(float(att_err_final))
+            all_goal_steps.append(int(goal_steps))
+            all_att_err_mean.append(att_err_sum / max(n_steps, 1))
             if du_norms:
                 all_du_mean.append(float(np.mean(du_norms)))
                 all_du_max.append(float(np.max(du_norms)))
@@ -535,7 +543,9 @@ def _eval_nn_policy(
     return {"koz": avg_koz, "koz_max": max_koz, "reward": avg_reward,
             "filter_frac": avg_filt_frac, "fallback_frac": avg_fb_frac,
             "min_margin_deg": avg_min_margin, "worst_margin_deg": worst_min_margin,
-            "att_err_deg": avg_att_err, "n_eps": n_episodes}
+            "att_err_deg": avg_att_err, "n_eps": n_episodes,
+            "goal_steps": float(np.mean(all_goal_steps)),
+            "att_err_mean_deg": float(np.mean(all_att_err_mean))}
 
 
 def _log_filter_success(writer, task_id: int, step: int, res_f: dict, res_u: dict) -> None:
@@ -565,13 +575,13 @@ def _log_filter_success(writer, task_id: int, step: int, res_f: dict, res_u: dic
           f"success_rate={rate:.0%}")
 
 
-def _eval_forgetting_matrix(nn_agent, logger, k, hparams):
+def _eval_forgetting_matrix(nn_agent, eval_envs, out_dir, writer, k, hparams):
     """After task k, evaluate the frozen policy on every task j <= k, filtered and
     unfiltered, appending one row per cell to forgetting_matrix.csv."""
     import csv
     from hypercrl.envs.space_tasks import get_task_spec
 
-    path = os.path.join(logger.tflog_dir, "forgetting_matrix.csv")
+    path = os.path.join(out_dir, "forgetting_matrix.csv")
     write_header = not os.path.exists(path)
     with open(path, "a", newline="") as fh:
         w = csv.writer(fh)
@@ -579,21 +589,24 @@ def _eval_forgetting_matrix(nn_agent, logger, k, hparams):
             w.writerow(["seed", "env", "condition", "after_task", "eval_task", "filter",
                         "task_name", "koz_mean", "koz_max", "reward", "min_margin_deg",
                         "worst_margin_deg", "filter_frac", "fallback_frac",
-                        "att_err_deg", "n_eps"])
+                        "att_err_deg", "n_eps", "goal_steps", "att_err_mean_deg"])
         for j in range(k + 1):
-            env = logger.eval_envs.get_env(j)
+            env = eval_envs.get_env(j)
             nn_agent.cache_state_norm(j)
             nn_agent.set_safety_filter(env.get_safety_filter())
             for tag, n_eps in (("filtered", hparams.forget_eval_eps_filtered),
                                ("unfiltered", hparams.forget_eval_eps_unfiltered)):
-                r = _eval_nn_policy(nn_agent, env, j, logger.writer, k, n_episodes=n_eps,
+                # Same episodes for every k and for both filter settings (paired).
+                env.seed(1_000_000 + 1000 * hparams.seed + j)
+                r = _eval_nn_policy(nn_agent, env, j, writer, k, n_episodes=n_eps,
                                     tag_prefix=f"forget/after_task_{k}/{tag}",
                                     disable_filter=(tag == "unfiltered"))
                 w.writerow([hparams.seed, hparams.env, hparams.cf_condition, k, j, tag,
                             get_task_spec(hparams.env, j).name,
                             r["koz"], r["koz_max"], r["reward"], r["min_margin_deg"],
                             r["worst_margin_deg"], r["filter_frac"], r["fallback_frac"],
-                            r["att_err_deg"], r["n_eps"]])
+                            r["att_err_deg"], r["n_eps"], r["goal_steps"],
+                            r["att_err_mean_deg"]])
 
 
 def run(hparams):
@@ -670,6 +683,7 @@ def run(hparams):
         policy = PolicyNet(
             state_dim=hparams.state_dim,
             action_dim=hparams.control_dim,
+            n_tasks=hparams.num_tasks if getattr(hparams, "policy_replay", False) else 0,
         ).to(hparams.device)
         policy_trainer = PolicyTrainer(policy, hparams)
         policy_trainer._dagger_n_iter = getattr(hparams, "dagger_n_iter", 5)
@@ -851,8 +865,15 @@ def run(hparams):
                         task_id, skip_first_n=hparams.init_rand_steps)
                     policy_train_set, sample_w = policy_trainer._make_policy_train_set(
                         bc_base, collector, task_id)
+                    if getattr(hparams, "policy_replay", False) and task_id > 0:
+                        policy_trainer.refresh_replay(
+                            agent, collector, task_id,
+                            env_for_task=logger.eval_envs.get_env)
+                        agent.cache_hnet(task_id)
+                        if hasattr(env, "get_safety_filter"):
+                            agent.set_safety_filter(env.get_safety_filter())
                     policy_trainer.train(policy_train_set, writer=logger.writer,
-                                         sample_weights=sample_w)
+                                         sample_weights=sample_w, task_id=task_id)
                     if logger.writer is not None:
                         n_dyn = bc_base.tensors[0].shape[0]
                         n_dag = len(policy_trainer._dag_states)
@@ -976,7 +997,8 @@ def run(hparams):
                        os.path.join(logger.model_dir, f"policy_{task_id}.pt"))
 
         if hparams.eval_forgetting and hparams.env.startswith("spaceEnv"):
-            _eval_forgetting_matrix(nn_agent, logger, task_id, hparams)
+            _eval_forgetting_matrix(nn_agent, logger.eval_envs, logger.tflog_dir,
+                                    logger.writer, task_id, hparams)
 
         # Save Model
         logger.save(task_id)
@@ -1001,7 +1023,7 @@ def chunked_hnet(env, seed=None, savepath=None, play=False, render=False, run_na
 def hnet(env, seed=None, savepath=None, play=False, render=False, device="cpu",
          run_name=None, num_tasks=None, norms_path=None, fast_dagger=False,
          fixed_scenario=False, cf_experiment=False, no_dagger=False,
-         cl_profile=False):
+         cl_profile=False, no_hnet_reg=False, replay=False):
     # Hyperparameters
     hparams = HP(env, seed, savepath, run_name=run_name)
     hparams.model = "hnet"
@@ -1020,9 +1042,16 @@ def hnet(env, seed=None, savepath=None, play=False, render=False, device="cpu",
                                  - hparams.policy_train_start) // hparams.dagger_every
         hparams.dagger_val_eps_filtered = 4
         hparams.dagger_val_eps_unfiltered = 10
+    hparams.policy_replay = replay
+    if no_hnet_reg:
+        hparams.beta = 0.0   # same network, continual-learning regulariser off
     if cf_experiment:
         hparams.eval_forgetting = True
         hparams.cf_condition = "bc" if no_dagger else "dagger"
+        if no_hnet_reg:                      # so the analysis can separate the arms
+            hparams.cf_condition += "_noreg"
+        if replay:
+            hparams.cf_condition += "_replay"
     if no_dagger:
         hparams.dagger_every = 0
 
@@ -1048,6 +1077,8 @@ def hnet(env, seed=None, savepath=None, play=False, render=False, device="cpu",
                                               # (unfiltered stays cheap at 40)
 
     hparams = Hparams.add_hnet_hparams(hparams)
+    if no_hnet_reg:
+        hparams.beta = 0.0   # add_hnet_hparams resets beta, so apply it again here
 
     if play:
         play_model(hparams)

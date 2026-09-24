@@ -68,13 +68,14 @@ MOI = [
     SpaceTaskSpec("oblate", inertia=((80.0, 2.0, 0.0), (2.0, 80.0, 0.0), (0.0, 0.0, 20.0))),
 ]
 
-# Faults bottom out at 0.15, not 0: two-torque attitude control is not stabilizable
-# by continuous static feedback, so a dead axis would be unlearnable for the policy.
+# Severity is capped so the MPC expert can still solve the task: measured on
+# runs/cl_s2, at 0.35 roll it reached the goal in 1.7/12 episodes and at 0.15 yaw
+# never, so the policy was distilling a failing teacher.
 THRUSTER = [
     SpaceTaskSpec("nominal"),
-    SpaceTaskSpec("roll_degraded", thruster_health=(0.35, 1.0, 1.0)),
-    SpaceTaskSpec("yaw_near_dead", thruster_health=(1.0, 1.0, 0.15)),
-    SpaceTaskSpec("double_fault", thruster_health=(0.5, 0.15, 1.0)),
+    SpaceTaskSpec("roll_degraded", thruster_health=(0.6, 1.0, 1.0)),
+    SpaceTaskSpec("yaw_degraded", thruster_health=(1.0, 1.0, 0.35)),
+    SpaceTaskSpec("double_fault", thruster_health=(0.6, 0.35, 1.0)),
     SpaceTaskSpec("misaligned", allocation=((1.90, 0.50, 0.00),
                                             (-0.50, 1.80, 0.40),
                                             (0.10, -0.40, 1.70))),
