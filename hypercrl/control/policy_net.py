@@ -250,7 +250,7 @@ class PolicyTrainer:
             u_phys = torch.stack(acts)
             u_norm = (u_phys - a_mu.flatten().cpu()) / a_std.flatten().cpu()
             self._replay[j] = (x_norm, u_norm)
-            logger.info("replay: task %d relabelled (%d states)", j, x_norm.shape[0])
+            print(f"  [replay] task {j} relabelled ({x_norm.shape[0]} states)")
 
     # ------------------------------------------------------------------
 
