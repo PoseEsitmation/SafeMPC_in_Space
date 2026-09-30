@@ -214,11 +214,19 @@ class PolicyTrainer:
         # tasks, relabelled by the MPC expert through the hypernetwork's
         # weights for that task.  Survives reset_per_task by design.
         self.n_tasks = getattr(policy, "n_tasks", 0)
-        self.replay_n = getattr(hparams, "policy_replay_n", 256)
+        self.replay_n = getattr(hparams, "policy_replay_n", 512)
+        # Share of the sampling mass given to ALL replayed tasks together;
+        # None = balanced, every task seen so far (incl. the current) gets
+        # 1/(k+1).  Uniform sampling left replay at ~2% of rows (cl_s4).
+        self.replay_frac = getattr(hparams, "policy_replay_frac", None)
         self._replay: dict = {}
 
     def _onehot(self, task_id: int, n_rows: int) -> torch.Tensor:
-        oh = torch.zeros(n_rows, max(self.n_tasks, 1))
+        # Untagged policy (no replay): a dummy column the policy ignores —
+        # indexing it with task_id >= 1 crashed the no-replay arms in cl_s4.
+        if not self.n_tasks:
+            return torch.zeros(n_rows, 1)
+        oh = torch.zeros(n_rows, self.n_tasks)
         oh[:, int(task_id)] = 1.0
         return oh
 
@@ -229,7 +237,15 @@ class PolicyTrainer:
         labels are only correct if the hypernetwork still remembers it — which
         is exactly the property under test.  States come from the collector, so
         nothing is simulated in the old environment.
+
+        The planner warm-starts from its previous plan, so it is reset before
+        every (unrelated) state and its current-task plan is restored after.
         """
+        ctrl = getattr(getattr(mpc_agent, "mpc", mpc_agent), "control", None)
+        saved = {k: (v.clone() if torch.is_tensor(v) else v)
+                 for k, v in vars(ctrl).items()
+                 if v is None or torch.is_tensor(v)} if ctrl is not None else {}
+
         for j in range(task_id):
             x_all, _ = collector.get_dataset(j)
             x_all = x_all.tensors[0]
@@ -245,12 +261,16 @@ class PolicyTrainer:
                 mpc_agent.set_safety_filter(env_j.get_safety_filter())
             acts = []
             for row in x_raw:
+                mpc_agent.reset()
                 u = mpc_agent.act(row.numpy(), task_id=j).detach().cpu().flatten()
                 acts.append(u)
             u_phys = torch.stack(acts)
             u_norm = (u_phys - a_mu.flatten().cpu()) / a_std.flatten().cpu()
             self._replay[j] = (x_norm, u_norm)
             print(f"  [replay] task {j} relabelled ({x_norm.shape[0]} states)")
+
+        for k, v in saved.items():
+            setattr(ctrl, k, v)
 
     # ------------------------------------------------------------------
 
@@ -306,7 +326,33 @@ class PolicyTrainer:
             tags = torch.tensor(self._dag_filter_active, dtype=torch.float32)
 
         dataset = _TDS(torch.cat(xs, dim=0), torch.cat(us, dim=0), torch.cat(ts, dim=0))
-        return dataset, self._sample_weights(dataset.tensors[0], tags=tags)
+        weights = self._sample_weights(dataset.tensors[0], tags=tags)
+        if self._replay:
+            weights = self._balance_replay(weights, [x.shape[0] for x in xs],
+                                           n_old=len(self._replay))
+        return dataset, weights
+
+    def _balance_replay(self, weights, block_sizes, n_old):
+        """Rescale weights so each replayed task gets its sampling share.
+
+        block_sizes: rows per block in dataset order — n_old replay blocks,
+        then the current task's base and (optional) DAGGER block, which share
+        the current task's mass.  Safety weighting within a block is kept.
+        """
+        n = sum(block_sizes)
+        w = torch.ones(n) if weights is None else weights.clone()
+        frac = self.replay_frac if self.replay_frac is not None else n_old / (n_old + 1)
+        s = 0
+        for b, size in enumerate(block_sizes):
+            e = s + size
+            if b == n_old:                       # current task: all remaining rows
+                e = n
+            mass = frac / n_old if b < n_old else 1.0 - frac
+            w[s:e] *= mass / w[s:e].sum()
+            s = e
+            if s == n:
+                break
+        return w
 
     def _sample_weights(self, x_all: torch.Tensor,
                         tags: Optional[torch.Tensor] = None) -> Optional[torch.Tensor]:

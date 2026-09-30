@@ -148,6 +148,11 @@ def default_arg_policy(hparams):
     # (WeightedRandomSampler).  1.0 = uniform sampling (off).
     hparams.policy_safety_oversample = 1.0
     hparams.policy_safety_margin_deg = 15.0
+    # Expert replay (--replay): states relabelled per old task per policy
+    # phase, and the sampling share of all old tasks together (None =
+    # balanced 1/(k+1) per task seen so far).
+    hparams.policy_replay_n = 512
+    hparams.policy_replay_frac = None
     # CBF hinge margin during policy training (0 = penalise only outright
     # violation).  Positive values create gradient in the approach corridor
     # and give the learned condition robustness headroom.

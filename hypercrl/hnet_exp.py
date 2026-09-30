@@ -863,8 +863,8 @@ def run(hparams):
                     # trainer appends its expert-labelled buffer on top.
                     bc_base, _ = collector.get_dataset(
                         task_id, skip_first_n=hparams.init_rand_steps)
-                    policy_train_set, sample_w = policy_trainer._make_policy_train_set(
-                        bc_base, collector, task_id)
+                    # Relabel before building the train set, else the first
+                    # phase of each task trains on the previous phase's replay.
                     if getattr(hparams, "policy_replay", False) and task_id > 0:
                         policy_trainer.refresh_replay(
                             agent, collector, task_id,
@@ -872,6 +872,8 @@ def run(hparams):
                         agent.cache_hnet(task_id)
                         if hasattr(env, "get_safety_filter"):
                             agent.set_safety_filter(env.get_safety_filter())
+                    policy_train_set, sample_w = policy_trainer._make_policy_train_set(
+                        bc_base, collector, task_id)
                     policy_trainer.train(policy_train_set, writer=logger.writer,
                                          sample_weights=sample_w, task_id=task_id)
                     if logger.writer is not None:

@@ -2,6 +2,7 @@
 ckpts/
 data/
 runs/
+new_runs/
 lightning_logs/
 .ipynb_checkpoints/
 **/__pycache__
