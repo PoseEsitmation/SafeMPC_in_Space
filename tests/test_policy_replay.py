@@ -87,7 +87,7 @@ def test_refresh_resets_planner_and_restores_current_plan():
     t = _trainer(n_tasks=2, policy_replay_n=5)
     agent = _Agent()
     t.refresh_replay(agent, _Collector(), task_id=1, env_for_task=lambda j: object())
-    assert len(agent.seen) == 5
+    assert len(agent.seen) == 10                               # labels + noise re-solve
     assert all(torch.all(m == 0) for m in agent.seen)          # cold start each state
     assert torch.all(agent.control.mean == 7.0)                # current plan restored
 
