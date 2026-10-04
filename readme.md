@@ -31,10 +31,12 @@ SafeMPC_in_Space/
 **Prerequisites:** Python 3.12+, conda
 
 ```bash
-conda create -n <your-env-name>
-conda activate <your-env-name>
-pip install -r requirements.txt
+conda env create -f environment.yml
+conda activate safempc
 ```
+
+`environment.yml` pins Python and installs `requirements.txt`. Activate the env
+before `scripts/launch.py`: every run uses the launcher's interpreter.
 ## Usage
 
 ### Basic Usage

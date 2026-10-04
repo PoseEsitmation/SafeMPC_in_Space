@@ -81,6 +81,23 @@ THRUSTER = [
                                             (0.10, -0.40, 1.70))),
 ]
 
+# Conflicting faults at full authority: wiring faults instead of weak thrusters.
+# THRUSTER's tasks were too alike to cause forgetting — in cl_s5 the policy
+# without replay *improved* on task 0 after training task 1.  Here the same
+# state needs a different command in every task (sign flipped on roll, roll
+# and yaw channels swapped), so a policy that doesn't know the task can't serve
+# them all, while max |B u| stays nominal and the MPC expert keeps full torque.
+_S = NOMINAL_SCALE_TORQUE
+THRUSTER_CONFLICT = [
+    SpaceTaskSpec("nominal"),
+    SpaceTaskSpec("roll_reversed", allocation=((-_S, 0.0, 0.0),
+                                               (0.0, _S, 0.0),
+                                               (0.0, 0.0, _S))),
+    SpaceTaskSpec("roll_yaw_swapped", allocation=((0.0, 0.0, _S),
+                                                  (0.0, _S, 0.0),
+                                                  (_S, 0.0, 0.0))),
+]
+
 # Negative control: identical tasks.
 NULL = [SpaceTaskSpec(f"identical_{i}") for i in range(4)]
 
@@ -88,6 +105,7 @@ FAMILIES = {
     "spaceEnv": DIFFICULTY,
     "spaceEnv_moi": MOI,
     "spaceEnv_thruster": THRUSTER,
+    "spaceEnv_conflict": THRUSTER_CONFLICT,
     "spaceEnv_null": NULL,
 }
 

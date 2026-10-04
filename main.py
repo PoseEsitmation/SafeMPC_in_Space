@@ -59,6 +59,10 @@ def run_hnet(args):
         cl_profile=getattr(args, 'cl_profile', False),
         no_hnet_reg=getattr(args, 'no_hnet_reg', False),
         replay=getattr(args, 'replay', False),
+        replay_labels=getattr(args, 'replay_labels', 'expert'),
+        replay_frac=getattr(args, 'replay_frac', None),
+        reg_share=getattr(args, 'reg_share', 0.8),
+        first_task_mult=getattr(args, 'first_task_mult', 1.0),
     )
 
 
@@ -231,6 +235,15 @@ def main():
                              help="Expert replay: relabel stored old-task states with the MPC expert through the hypernetwork, and train the (task-conditioned) policy on them")
     run_parser.add_argument("--no-hnet-reg", action="store_true", dest="no_hnet_reg",
                              help="Ablation arm: same hypernetwork, continual-learning regulariser off (beta=0)")
+    run_parser.add_argument("--replay-labels", choices=["expert", "stored"], default="expert", dest="replay_labels",
+                             help="Replay labels: 'expert' relabels old-task states with the MPC through the hypernetwork; "
+                                  "'stored' reuses the expert actions recorded when the task was trained (plain rehearsal)")
+    run_parser.add_argument("--replay-frac", type=float, default=None, dest="replay_frac",
+                             help="Sampling share of all replayed old tasks together (default: balanced 1/(k+1) per task)")
+    run_parser.add_argument("--reg-share", type=float, default=0.8, dest="reg_share",
+                             help="Adapt beta so the hnet regulariser is this share of the total loss (0 = fixed beta)")
+    run_parser.add_argument("--first-task-mult", type=float, default=1.0, dest="first_task_mult",
+                             help="Run task 0 this many times longer (MPC steps and DAgger rounds) so its policy is trained before later tasks")
     run_parser.add_argument("--cl-profile", action="store_true", dest="cl_profile",
                              help="Shorter per-task profile for continual-learning runs (~1.3 h/task)")
 

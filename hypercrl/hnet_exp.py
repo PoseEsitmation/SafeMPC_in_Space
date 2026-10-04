@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader
 
 from hypercrl.tools import reset_seed, str_to_act
 from hypercrl.tools import MonitorHnet, HP, Hparams
+from hypercrl.tools.reg_share import RegShareBeta
 from hypercrl.control import RandomAgent, MPC, SafeAgent, SafetyFilter
 from hypercrl.control.agent import NNPolicyAgent
 from hypercrl.control.policy_net import PolicyNet, PolicyTrainer
@@ -257,6 +258,16 @@ def train(task_id, mnet, hnet, trainer_misc, logger, train_set, hparams):
     # Whether the regularizer will be computed during training?
     calc_reg = task_id > 0 and hparams.beta > 0
 
+    # Adaptive beta (reg_share_target): the monitor outlives this call, so the
+    # controller's loss EMAs carry over between dynamics updates of a task.
+    reg_ctrl = None
+    if calc_reg and getattr(hparams, "reg_share_target", None):
+        reg_ctrl = getattr(logger, "reg_ctrl", None)
+        if reg_ctrl is None:
+            reg_ctrl = logger.reg_ctrl = RegShareBeta(
+                hparams.reg_share_target, hparams.beta,
+                beta_max=getattr(hparams, "reg_beta_max", 1e3))
+
     it = 0
     while it < hparams.train_dynamic_iters:
         mnet.train()
@@ -325,7 +336,11 @@ def train(task_id, mnet, hnet, trainer_misc, logger, train_set, hparams):
                     fisher_estimates=fisher_ests,
                     si_omega=si_omega)
                 
-                loss_reg = loss_reg * hparams.beta * Y.size(0)
+                loss_reg = loss_reg * Y.size(0)
+                beta = hparams.beta
+                if reg_ctrl is not None:
+                    beta = reg_ctrl.update(task_id, loss_task.item(), loss_reg.item())
+                loss_reg = loss_reg * beta
 
                 loss_reg.backward()
 
@@ -350,7 +365,8 @@ def train(task_id, mnet, hnet, trainer_misc, logger, train_set, hparams):
             torch.nn.utils.clip_grad_norm_(regularized_params, hparams.grad_max_norm)
             theta_optimizer.step()
 
-            logger.train_step(loss_task, loss_reg, dTheta, grad_tloss, weights)       
+            logger.train_step(loss_task, loss_reg, dTheta, grad_tloss, weights,
+                              beta=beta if calc_reg else 0.0)
             # Validate
             logger.validate(mll)
 
@@ -727,6 +743,20 @@ def run(hparams):
         if not hparams.resume:
             policy_trainer.reset_per_task()
 
+        # --first-task-mult: a longer task 0 (more MPC steps, proportionally
+        # more DAgger rounds).  In cl_s5 the policy's task-0 score plateaued and
+        # only rose once task 1 added data, so task 0 never had a fair baseline.
+        task_steps = hparams.max_iteration
+        n_dagger = getattr(hparams, "dagger_n_iter", 5)
+        if task_id == 0 and getattr(hparams, "first_task_mult", 1.0) != 1.0:
+            task_steps = int(round(hparams.max_iteration * hparams.first_task_mult))
+            start = getattr(hparams, "policy_train_start", 0)
+            n_dagger = int(round(n_dagger * (task_steps - start)
+                                 / max(1, hparams.max_iteration - start)))
+            print(f"[task 0] {task_steps} steps, {n_dagger} DAgger rounds "
+                  f"(first_task_mult={hparams.first_task_mult})")
+        policy_trainer._dagger_n_iter = n_dagger
+
         print(f"Collecting some random data first for task {task_id}")
         x_t, _ = env.reset()
         rand_koz_hits = 0
@@ -782,7 +812,7 @@ def run(hparams):
         # Interact with the environment
         x_t, _ = env.reset()
         agent.reset()
-        for it in range(hparams.max_iteration):
+        for it in range(task_steps):
             if it % hparams.dynamics_update_every == 0:
                 # Train Dynamics Model
                 ts = time.time()
@@ -869,6 +899,11 @@ def run(hparams):
                         policy_trainer.refresh_replay(
                             agent, collector, task_id,
                             env_for_task=logger.eval_envs.get_env)
+                        if logger.writer is not None:
+                            for j, st in policy_trainer.replay_stats.items():
+                                for k, v in st.items():
+                                    logger.writer.add_scalar(f"replay/task_{j}/{k}", v,
+                                                             logger.env_iter)
                         agent.cache_hnet(task_id)
                         if hasattr(env, "get_safety_filter"):
                             agent.set_safety_filter(env.get_safety_filter())
@@ -920,7 +955,7 @@ def run(hparams):
                     and it >= getattr(hparams, "policy_train_start", 0)
                     and it > 0
                     and it % dagger_every == 0
-                    and policy_trainer._dagger_iter < getattr(hparams, "dagger_n_iter", 5)):
+                    and policy_trainer._dagger_iter < policy_trainer._dagger_n_iter):
                 nn_agent.cache_state_norm(task_id)
 
                 # Capture norms for the closure — populated by cache_state_norm above.
@@ -1025,7 +1060,8 @@ def chunked_hnet(env, seed=None, savepath=None, play=False, render=False, run_na
 def hnet(env, seed=None, savepath=None, play=False, render=False, device="cpu",
          run_name=None, num_tasks=None, norms_path=None, fast_dagger=False,
          fixed_scenario=False, cf_experiment=False, no_dagger=False,
-         cl_profile=False, no_hnet_reg=False, replay=False):
+         cl_profile=False, no_hnet_reg=False, replay=False, replay_labels="expert",
+         replay_frac=None, reg_share=0.8, first_task_mult=1.0):
     # Hyperparameters
     hparams = HP(env, seed, savepath, run_name=run_name)
     hparams.model = "hnet"
@@ -1045,6 +1081,10 @@ def hnet(env, seed=None, savepath=None, play=False, render=False, device="cpu",
         hparams.dagger_val_eps_filtered = 4
         hparams.dagger_val_eps_unfiltered = 10
     hparams.policy_replay = replay
+    hparams.policy_replay_labels = replay_labels
+    if replay_frac is not None:
+        hparams.policy_replay_frac = replay_frac
+    hparams.first_task_mult = first_task_mult
     if no_hnet_reg:
         hparams.beta = 0.0   # same network, continual-learning regulariser off
     if cf_experiment:
@@ -1054,6 +1094,8 @@ def hnet(env, seed=None, savepath=None, play=False, render=False, device="cpu",
             hparams.cf_condition += "_noreg"
         if replay:
             hparams.cf_condition += "_replay"
+            if replay_labels == "stored":
+                hparams.cf_condition += "_stored"
     if no_dagger:
         hparams.dagger_every = 0
 
@@ -1081,6 +1123,7 @@ def hnet(env, seed=None, savepath=None, play=False, render=False, device="cpu",
     hparams = Hparams.add_hnet_hparams(hparams)
     if no_hnet_reg:
         hparams.beta = 0.0   # add_hnet_hparams resets beta, so apply it again here
+    hparams.reg_share_target = reg_share or None
 
     if play:
         play_model(hparams)

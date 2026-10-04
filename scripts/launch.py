@@ -6,6 +6,7 @@
     python scripts/launch.py --seeds 0 1 2            # 9 runs, 4 at a time
     python scripts/launch.py --devices cuda:0 cuda:1  # spread across GPUs
     python scripts/launch.py --profile fast           # shortened runs (~1/3 the time)
+    python scripts/launch.py --env spaceEnv_conflict --first-task-mult 2   # conflicting faults
 
 Keep it alive on a server:
     nohup python scripts/launch.py --seeds 0 1 2 > launch.log 2>&1 &
@@ -22,6 +23,7 @@ ARMS = {
     "noreg":        ["--no-hnet-reg"],              # regulariser off, no replay
     "hnet_replay":  ["--replay"],                   # the method
     "noreg_replay": ["--replay", "--no-hnet-reg"],  # replay without the memory
+    "hnet_replay_stored": ["--replay", "--replay-labels", "stored"],  # rehearsal, no relabelling
 }
 
 ap = argparse.ArgumentParser(description=__doc__,
@@ -35,11 +37,28 @@ ap.add_argument("--out", default="runs/cl_s4")
 ap.add_argument("--devices", nargs="+", default=["cuda:0"])
 ap.add_argument("--max-parallel", type=int, default=4)
 ap.add_argument("--profile", choices=["full", "fast"], default="full")
+ap.add_argument("--replay-frac", type=float, default=0.2,
+                help="sampling share of all replayed old tasks (replay arms); "
+                     "cl_s5 used the balanced default 1/(k+1), i.e. 1/2-2/3")
+ap.add_argument("--reg-share", type=float, default=0.8,
+                help="hnet regulariser's target share of the total loss (0 = fixed beta)")
+ap.add_argument("--first-task-mult", type=float, default=1.0,
+                help="run task 0 this many times longer")
 ap.add_argument("--wait-for-idle", action="store_true",
                 help="wait until no other training is running before starting")
 args = ap.parse_args()
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Every run uses this interpreter.  Launched from conda's base, all of cl_s4's
+# noreg runs and cl_s5's seeds 1-2 died at import ("No module named numpy").
+pre = subprocess.run([sys.executable, "-c", "import numpy, torch, hypercrl"],
+                     cwd=ROOT, capture_output=True, text=True)
+if pre.returncode != 0:
+    sys.exit(f"{sys.executable} can't import the project:\n"
+             f"{pre.stderr.strip().splitlines()[-1]}\n"
+             f"activate the right env first (conda activate safempc)")
+
 os.makedirs(os.path.join(ROOT, args.out), exist_ok=True)
 
 jobs = [(arm, seed) for seed in args.seeds for arm in args.arms]
@@ -66,7 +85,11 @@ while queue or running:
         cmd = [sys.executable, "-u", "main.py", "run", "--method", "hnet",
                "--env", args.env, "--device", next(devices), "--seed", str(seed),
                "--num-tasks", str(args.tasks), "--savepath", args.out,
-               "--cf-experiment", "--fixed-scenario", "--name", name] + ARMS[arm]
+               "--cf-experiment", "--fixed-scenario", "--name", name,
+               "--reg-share", str(args.reg_share),
+               "--first-task-mult", str(args.first_task_mult)] + ARMS[arm]
+        if "--replay" in ARMS[arm]:
+            cmd += ["--replay-frac", str(args.replay_frac)]
         if args.profile == "fast":
             cmd.append("--cl-profile")
         fh = open(log, "w")

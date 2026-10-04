@@ -10,22 +10,33 @@ class MonitorHnet(MonitorRL):
 
         self.loss_task = 0
         self.loss_reg = 0
+        self.beta = 0
 
-    def train_step(self, loss_task, loss_reg, dTheta, grad_tloss, weights):
+    def train_step(self, loss_task, loss_reg, dTheta, grad_tloss, weights, beta=None):
         self.loss_task += loss_task.item()
         self.loss_reg += loss_reg.item()
+        if beta is not None:
+            self.beta += beta
         if (self.train_iter % self.print_train_every == 0):
             self.loss_task /= self.print_train_every
             self.loss_reg /= self.print_train_every
+            self.beta /= self.print_train_every
             loss_tot = self.loss_reg + self.loss_task
-            print(f"Batch: {self.train_iter}, Loss: {loss_tot:.5f}, " + 
-                  f"Task L: {self.loss_task:.5f}, Reg L: {self.loss_reg:.5f}")
+            # Share of the (weighted) regulariser in the total; target set by
+            # hparams.reg_share_target.
+            share = self.loss_reg / loss_tot if loss_tot > 0 else 0.0
+            print(f"Batch: {self.train_iter}, Loss: {loss_tot:.5f}, " +
+                  f"Task L: {self.loss_task:.5f}, Reg L: {self.loss_reg:.5f}, " +
+                  f"Reg share: {share:.1%}, beta: {self.beta:.4g}")
 
             i = self.train_iter
 
             self.writer.add_scalar('train/loss', self.loss_task, i)
             self.writer.add_scalar('train/regularizer', self.loss_reg, i)
             self.writer.add_scalar('train/total_loss', loss_tot, i)
+            self.writer.add_scalar('train/reg_share', share, i)
+            self.writer.add_scalar('train/beta', self.beta, i)
+            self.beta = 0
             if dTheta is not None:
                 dT_norm = torch.norm(torch.cat([d.view(-1) for d in dTheta]), 2)
                 self.writer.add_scalar('train/delta_theta_norm', dT_norm, i)

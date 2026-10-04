@@ -29,6 +29,7 @@ from typing import Callable, Optional
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
 logger = logging.getLogger(__name__)
@@ -219,7 +220,16 @@ class PolicyTrainer:
         # None = balanced, every task seen so far (incl. the current) gets
         # 1/(k+1).  Uniform sampling left replay at ~2% of rows (cl_s4).
         self.replay_frac = getattr(hparams, "policy_replay_frac", None)
+        # "expert": relabel with the MPC through the hnet (tests the hnet's
+        # memory); "stored": reuse the expert actions recorded while the task
+        # was trained (plain rehearsal, label quality = BC base quality).
+        self.replay_labels = getattr(hparams, "policy_replay_labels", "expert")
+        # Draw replay states from the MPC phase only, like the BC base — the
+        # random phase's states are off the expert's distribution.
+        self.replay_skip = getattr(hparams, "init_rand_steps", 0)
         self._replay: dict = {}
+        # {task_id: {...}} label diagnostics from the last refresh_replay.
+        self.replay_stats: dict = {}
 
     def _onehot(self, task_id: int, n_rows: int) -> torch.Tensor:
         # Untagged policy (no replay): a dummy column the policy ignores —
@@ -231,12 +241,20 @@ class PolicyTrainer:
         return oh
 
     def refresh_replay(self, mpc_agent, collector, task_id: int, env_for_task) -> None:
-        """Relabel stored states of every finished task with the MPC expert.
+        """Rebuild the replay set of every finished task.
 
-        The expert plans with the hypernetwork's weights for that task, so the
-        labels are only correct if the hypernetwork still remembers it — which
-        is exactly the property under test.  States come from the collector, so
-        nothing is simulated in the old environment.
+        Labels (``replay_labels``):
+          * "expert": relabel stored states with the MPC expert, planning with
+            the hypernetwork's weights for that task — correct only if the
+            hypernetwork still remembers the task, which is the property under
+            test.  States come from the collector, so nothing is simulated in
+            the old environment.
+          * "stored": the expert actions recorded when the task was trained.
+
+        In "expert" mode the relabelled actions are compared with the stored
+        ones, and a second cold-start label of the first rows measures the
+        planner's own noise (``replay_stats``): cl_s5's replay arms did worse
+        than no replay, and these numbers say whether the labels are to blame.
 
         The planner warm-starts from its previous plan, so it is reset before
         every (unrelated) state and its current-task plan is restored after.
@@ -247,27 +265,49 @@ class PolicyTrainer:
                  if v is None or torch.is_tensor(v)} if ctrl is not None else {}
 
         for j in range(task_id):
-            x_all, _ = collector.get_dataset(j)
-            x_all = x_all.tensors[0]
+            ds, _ = collector.get_dataset(j, skip_first_n=self.replay_skip)
+            x_all, u_all = ds.tensors[0], ds.tensors[1]
             idx = torch.randperm(x_all.shape[0])[: self.replay_n]
-            x_norm = x_all[idx]
+            x_norm, u_stored = x_all[idx], u_all[idx]
+
+            if self.replay_labels == "stored":
+                self._replay[j] = (x_norm, u_stored)
+                print(f"  [replay] task {j}: {x_norm.shape[0]} states, stored labels")
+                continue
 
             x_mu, x_std, a_mu, a_std = collector.norm(j)
             x_raw = x_norm * x_std.flatten().cpu() + x_mu.flatten().cpu()
+            a_mu, a_std = a_mu.flatten().cpu(), a_std.flatten().cpu()
 
             mpc_agent.cache_hnet(j)
             env_j = env_for_task(j)
             if hasattr(env_j, "get_safety_filter"):
                 mpc_agent.set_safety_filter(env_j.get_safety_filter())
-            acts = []
-            for row in x_raw:
+
+            def _label(row):
                 mpc_agent.reset()
-                u = mpc_agent.act(row.numpy(), task_id=j).detach().cpu().flatten()
-                acts.append(u)
-            u_phys = torch.stack(acts)
-            u_norm = (u_phys - a_mu.flatten().cpu()) / a_std.flatten().cpu()
+                return mpc_agent.act(row.numpy(), task_id=j).detach().cpu().flatten()
+
+            u_phys = torch.stack([_label(row) for row in x_raw])
+            u_norm = (u_phys - a_mu) / a_std
             self._replay[j] = (x_norm, u_norm)
-            print(f"  [replay] task {j} relabelled ({x_norm.shape[0]} states)")
+
+            n_rep = min(64, x_raw.shape[0])
+            u_again = (torch.stack([_label(row) for row in x_raw[:n_rep]]) - a_mu) / a_std
+            st = {
+                # relabel vs the action the expert took when the task was trained
+                "gap_stored": (u_norm - u_stored).norm(dim=1).mean().item(),
+                "cos_stored": F.cosine_similarity(u_norm, u_stored, dim=1).mean().item(),
+                # two cold-start solves of the same state: the planner's own noise
+                "gap_self": (u_norm[:n_rep] - u_again).norm(dim=1).mean().item(),
+                "norm_stored": u_stored.norm(dim=1).mean().item(),
+                "norm_relabel": u_norm.norm(dim=1).mean().item(),
+            }
+            self.replay_stats[j] = st
+            print(f"  [replay] task {j}: {x_norm.shape[0]} states relabelled  "
+                  f"|u_relabel-u_stored|={st['gap_stored']:.3f}  cos={st['cos_stored']:.2f}  "
+                  f"self-noise={st['gap_self']:.3f}  "
+                  f"|u| stored/relabel={st['norm_stored']:.2f}/{st['norm_relabel']:.2f}")
 
         for k, v in saved.items():
             setattr(ctrl, k, v)

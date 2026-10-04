@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-COLORS = ["#2a78d6", "#eb6834", "#1baf7a"]
+COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#9b59b6", "#7f7f7f"]
 METRICS = [("koz_mean", "Reds", ".1f"), ("att_err_mean_deg", "Purples", ".0f"), ("reward", "viridis", ".0f")]
 
 

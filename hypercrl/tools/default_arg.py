@@ -44,6 +44,12 @@ class Hparams():
         hparams.grad_max_norm = 5
 
         hparams.beta = 0.05
+        # Adapt beta so the weighted regulariser is this share of the total
+        # hnet loss (see tools/reg_share.py); None = fixed beta.  With fixed
+        # beta=0.05 the share was ~2% on spaceEnv_thruster (cl_s5).  beta
+        # above is then only the starting value.
+        hparams.reg_share_target = 0.8
+        hparams.reg_beta_max = 1e3
 
         hparams.no_look_ahead = False  # False=use two step optimization
         hparams.plastic_prev_tembs = False  # Allow adaptation of past task embeddings
