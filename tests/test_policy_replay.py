@@ -102,13 +102,14 @@ class _StoredCollector(_Collector):
 
 def test_stored_labels_skip_planner_and_random_phase():
     t = _trainer(n_tasks=2, policy_replay_n=8, policy_replay_labels="stored",
-                 init_rand_steps=5)
+                 init_rand_steps=5)                # replay_n applies to relabelling only
     agent, coll = _Agent(), _StoredCollector()
     t.refresh_replay(agent, coll, task_id=1, env_for_task=lambda j: object())
     x, u = t._replay[0]
     assert coll.skip == 5                      # random phase excluded
     assert agent.seen == []                    # no planner calls
     assert torch.equal(x[:, 0], u[:, 0])       # labels stay paired with their states
+    assert x.shape[0] == 30                    # stored labels: every state by default
 
 
 def test_expert_labels_report_gap_to_stored():

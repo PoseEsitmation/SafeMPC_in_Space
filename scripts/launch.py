@@ -40,6 +40,8 @@ ap.add_argument("--profile", choices=["full", "fast"], default="full")
 ap.add_argument("--replay-frac", type=float, default=0.2,
                 help="sampling share of all replayed old tasks (replay arms); "
                      "cl_s5 used the balanced default 1/(k+1), i.e. 1/2-2/3")
+ap.add_argument("--replay-n", type=int, default=None,
+                help="states per old task (default: 512 relabelled, all with stored labels)")
 ap.add_argument("--reg-share", type=float, default=0.8,
                 help="hnet regulariser's target share of the total loss (0 = fixed beta)")
 ap.add_argument("--first-task-mult", type=float, default=1.0,
@@ -90,6 +92,8 @@ while queue or running:
                "--first-task-mult", str(args.first_task_mult)] + ARMS[arm]
         if "--replay" in ARMS[arm]:
             cmd += ["--replay-frac", str(args.replay_frac)]
+            if args.replay_n is not None:
+                cmd += ["--replay-n", str(args.replay_n)]
         if args.profile == "fast":
             cmd.append("--cl-profile")
         fh = open(log, "w")

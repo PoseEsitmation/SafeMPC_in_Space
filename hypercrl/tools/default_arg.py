@@ -158,6 +158,11 @@ def default_arg_policy(hparams):
     # phase, and the sampling share of all old tasks together (None =
     # balanced 1/(k+1) per task seen so far).
     hparams.policy_replay_n = 512
+    # Stored-label replay needs no planner calls, so it can afford every
+    # MPC-phase state (None = all).  The expert's per-state labels are mostly
+    # noise (cl_s5 label check: two solves of one state agree with cos ~0.2),
+    # and 512 rows carrying 1/2-2/3 of the sampling mass were memorised noise.
+    hparams.policy_replay_n_stored = None
     hparams.policy_replay_frac = None
     # CBF hinge margin during policy training (0 = penalise only outright
     # violation).  Positive values create gradient in the approach corridor

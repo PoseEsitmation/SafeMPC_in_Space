@@ -61,6 +61,7 @@ def run_hnet(args):
         replay=getattr(args, 'replay', False),
         replay_labels=getattr(args, 'replay_labels', 'expert'),
         replay_frac=getattr(args, 'replay_frac', None),
+        replay_n=getattr(args, 'replay_n', None),
         reg_share=getattr(args, 'reg_share', 0.8),
         first_task_mult=getattr(args, 'first_task_mult', 1.0),
     )
@@ -240,6 +241,8 @@ def main():
                                   "'stored' reuses the expert actions recorded when the task was trained (plain rehearsal)")
     run_parser.add_argument("--replay-frac", type=float, default=None, dest="replay_frac",
                              help="Sampling share of all replayed old tasks together (default: balanced 1/(k+1) per task)")
+    run_parser.add_argument("--replay-n", type=int, default=None, dest="replay_n",
+                             help="States replayed per old task (default: 512 relabelled, or every MPC-phase state with stored labels)")
     run_parser.add_argument("--reg-share", type=float, default=0.8, dest="reg_share",
                              help="Adapt beta so the hnet regulariser is this share of the total loss (0 = fixed beta)")
     run_parser.add_argument("--first-task-mult", type=float, default=1.0, dest="first_task_mult",

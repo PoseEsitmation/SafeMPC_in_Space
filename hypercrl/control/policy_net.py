@@ -216,6 +216,7 @@ class PolicyTrainer:
         # weights for that task.  Survives reset_per_task by design.
         self.n_tasks = getattr(policy, "n_tasks", 0)
         self.replay_n = getattr(hparams, "policy_replay_n", 512)
+        self.replay_n_stored = getattr(hparams, "policy_replay_n_stored", None)
         # Share of the sampling mass given to ALL replayed tasks together;
         # None = balanced, every task seen so far (incl. the current) gets
         # 1/(k+1).  Uniform sampling left replay at ~2% of rows (cl_s4).
@@ -267,7 +268,8 @@ class PolicyTrainer:
         for j in range(task_id):
             ds, _ = collector.get_dataset(j, skip_first_n=self.replay_skip)
             x_all, u_all = ds.tensors[0], ds.tensors[1]
-            idx = torch.randperm(x_all.shape[0])[: self.replay_n]
+            n = self.replay_n_stored if self.replay_labels == "stored" else self.replay_n
+            idx = torch.randperm(x_all.shape[0])[:n]   # n=None: every state
             x_norm, u_stored = x_all[idx], u_all[idx]
 
             if self.replay_labels == "stored":
