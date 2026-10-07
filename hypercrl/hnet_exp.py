@@ -16,6 +16,7 @@ from hypercrl.tools.reg_share import RegShareBeta
 from hypercrl.control import RandomAgent, MPC, SafeAgent, SafetyFilter
 from hypercrl.control.agent import NNPolicyAgent
 from hypercrl.control.policy_net import PolicyNet, PolicyTrainer
+from hypercrl.control.policy_hnet import HnetPolicy, HnetPolicyTrainer
 from hypercrl.envs.space_cbf_clf import (make_space_cbf_fn, make_space_clf_fn,
                                          make_space_margin_fn,
                                          make_space_boundary_sampler,
@@ -702,6 +703,17 @@ def run(hparams):
             n_tasks=hparams.num_tasks if getattr(hparams, "policy_replay", False) else 0,
         ).to(hparams.device)
         policy_trainer = PolicyTrainer(policy, hparams)
+        if getattr(hparams, "policy_hnet", False):
+            # --policy-hnet: the student's weights come from its own
+            # hypernetwork, one task embedding per task (policy_hnet.py).
+            policy = HnetPolicy(
+                state_dim=hparams.state_dim,
+                action_dim=hparams.control_dim,
+                n_tasks=hparams.num_tasks,
+                hnet_arch=tuple(hparams.policy_hnet_arch),
+                te_dim=hparams.policy_hnet_te_dim,
+            ).to(hparams.device)
+            policy_trainer = HnetPolicyTrainer(policy, hparams)
         policy_trainer._dagger_n_iter = getattr(hparams, "dagger_n_iter", 5)
         nn_agent = NNPolicyAgent(hparams, policy, collector=collector)
 
@@ -742,6 +754,10 @@ def run(hparams):
         # rollout buffer is cleared so each task gets a fresh DAGGER pass.
         if not hparams.resume:
             policy_trainer.reset_per_task()
+        # Hypernetwork student: old tasks' generated weights become the
+        # regulariser targets, and task_id gets its embedding.
+        if getattr(hparams, "policy_hnet", False):
+            policy_trainer.begin_task(task_id)
 
         # --first-task-mult: a longer task 0 (more MPC steps, proportionally
         # more DAgger rounds).  In cl_s5 the policy's task-0 score plateaued and
@@ -1061,7 +1077,8 @@ def hnet(env, seed=None, savepath=None, play=False, render=False, device="cpu",
          run_name=None, num_tasks=None, norms_path=None, fast_dagger=False,
          fixed_scenario=False, cf_experiment=False, no_dagger=False,
          cl_profile=False, no_hnet_reg=False, replay=False, replay_labels="expert",
-         replay_frac=None, replay_n=None, reg_share=0.8, first_task_mult=1.0):
+         replay_frac=None, replay_n=None, reg_share=0.8, first_task_mult=1.0,
+         policy_hnet=False, policy_reg_share=0.8):
     # Hyperparameters
     hparams = HP(env, seed, savepath, run_name=run_name)
     hparams.model = "hnet"
@@ -1087,6 +1104,8 @@ def hnet(env, seed=None, savepath=None, play=False, render=False, device="cpu",
     if replay_n is not None:
         hparams.policy_replay_n = hparams.policy_replay_n_stored = replay_n
     hparams.first_task_mult = first_task_mult
+    hparams.policy_hnet = policy_hnet
+    hparams.policy_reg_share = policy_reg_share or None
     if no_hnet_reg:
         hparams.beta = 0.0   # same network, continual-learning regulariser off
     if cf_experiment:
@@ -1094,6 +1113,8 @@ def hnet(env, seed=None, savepath=None, play=False, render=False, device="cpu",
         hparams.cf_condition = "bc" if no_dagger else "dagger"
         if no_hnet_reg:                      # so the analysis can separate the arms
             hparams.cf_condition += "_noreg"
+        if policy_hnet:
+            hparams.cf_condition += "_phnet" if policy_reg_share else "_phnet_unprot"
         if replay:
             hparams.cf_condition += "_replay"
             if replay_labels == "stored":

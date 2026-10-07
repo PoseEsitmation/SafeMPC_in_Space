@@ -64,6 +64,8 @@ def run_hnet(args):
         replay_n=getattr(args, 'replay_n', None),
         reg_share=getattr(args, 'reg_share', 0.8),
         first_task_mult=getattr(args, 'first_task_mult', 1.0),
+        policy_hnet=getattr(args, 'policy_hnet', False),
+        policy_reg_share=getattr(args, 'policy_reg_share', 0.8),
     )
 
 
@@ -245,6 +247,10 @@ def main():
                              help="States replayed per old task (default: 512 relabelled, or every MPC-phase state with stored labels)")
     run_parser.add_argument("--reg-share", type=float, default=0.8, dest="reg_share",
                              help="Adapt beta so the hnet regulariser is this share of the total loss (0 = fixed beta)")
+    run_parser.add_argument("--policy-hnet", action="store_true", dest="policy_hnet",
+                             help="Generate the student policy's weights with its own hypernetwork (one task embedding per task)")
+    run_parser.add_argument("--policy-reg-share", type=float, default=0.8, dest="policy_reg_share",
+                             help="With --policy-hnet: the student regulariser's target share of its loss (0 = no protection)")
     run_parser.add_argument("--first-task-mult", type=float, default=1.0, dest="first_task_mult",
                              help="Run task 0 this many times longer (MPC steps and DAgger rounds) so its policy is trained before later tasks")
     run_parser.add_argument("--cl-profile", action="store_true", dest="cl_profile",

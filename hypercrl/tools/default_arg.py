@@ -157,6 +157,15 @@ def default_arg_policy(hparams):
     # Expert replay (--replay): states relabelled per old task per policy
     # phase, and the sampling share of all old tasks together (None =
     # balanced 1/(k+1) per task seen so far).
+    # --policy-hnet: the student's weights come from its own hypernetwork
+    # (HnetPolicy), protected by the same output regulariser as the dynamics
+    # model.  reg_share: the penalty's target share of the student's loss
+    # (None = unprotected ablation); beta: its starting weight.
+    hparams.policy_hnet = False
+    hparams.policy_hnet_arch = (128, 128)
+    hparams.policy_hnet_te_dim = 10
+    hparams.policy_reg_share = 0.8
+    hparams.policy_hnet_beta = 0.05
     hparams.policy_replay_n = 512
     # Stored-label replay needs no planner calls, so it can afford every
     # MPC-phase state (None = all).  The expert's per-state labels are mostly
