@@ -66,6 +66,8 @@ def run_hnet(args):
         first_task_mult=getattr(args, 'first_task_mult', 1.0),
         policy_hnet=getattr(args, 'policy_hnet', False),
         policy_reg_share=getattr(args, 'policy_reg_share', 0.8),
+        reg_grad_mode=getattr(args, 'reg_grad_mode', None),
+        reg_grad_beta=getattr(args, 'reg_grad_beta', 1.0),
     )
 
 
@@ -251,6 +253,10 @@ def main():
                              help="Generate the student policy's weights with its own hypernetwork (one task embedding per task)")
     run_parser.add_argument("--policy-reg-share", type=float, default=0.8, dest="policy_reg_share",
                              help="With --policy-hnet: the student regulariser's target share of its loss (0 = no protection)")
+    run_parser.add_argument("--reg-grad-mode", choices=["norm", "project"], default=None, dest="reg_grad_mode",
+                             help="Combine the dynamics hnet's task and regulariser gradients by hand: norm = ||g_reg|| = beta*||g_task||, project = remove g_task's component conflicting with g_reg (default: plain sum)")
+    run_parser.add_argument("--reg-grad-beta", type=float, default=1.0, dest="reg_grad_beta",
+                             help="With --reg-grad-mode norm: ||g_reg|| / ||g_task||")
     run_parser.add_argument("--first-task-mult", type=float, default=1.0, dest="first_task_mult",
                              help="Run task 0 this many times longer (MPC steps and DAgger rounds) so its policy is trained before later tasks")
     run_parser.add_argument("--cl-profile", action="store_true", dest="cl_profile",

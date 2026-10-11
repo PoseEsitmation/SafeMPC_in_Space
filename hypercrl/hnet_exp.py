@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader
 from hypercrl.tools import reset_seed, str_to_act
 from hypercrl.tools import MonitorHnet, HP, Hparams
 from hypercrl.tools.reg_share import RegShareBeta
+from hypercrl.tools import grad_combine
 from hypercrl.control import RandomAgent, MPC, SafeAgent, SafetyFilter
 from hypercrl.control.agent import NNPolicyAgent
 from hypercrl.control.policy_net import PolicyNet, PolicyTrainer
@@ -261,8 +262,12 @@ def train(task_id, mnet, hnet, trainer_misc, logger, train_set, hparams):
 
     # Adaptive beta (reg_share_target): the monitor outlives this call, so the
     # controller's loss EMAs carry over between dynamics updates of a task.
+    # Manual combination of task and regulariser gradients (tools/grad_combine.py);
+    # None keeps the plain summed backward passes.
+    grad_mode = getattr(hparams, "reg_grad_mode", None)
+
     reg_ctrl = None
-    if calc_reg and getattr(hparams, "reg_share_target", None):
+    if calc_reg and grad_mode != "norm" and getattr(hparams, "reg_share_target", None):
         reg_ctrl = getattr(logger, "reg_ctrl", None)
         if reg_ctrl is None:
             reg_ctrl = logger.reg_ctrl = RegShareBeta(
@@ -312,6 +317,7 @@ def train(task_id, mnet, hnet, trainer_misc, logger, train_set, hparams):
 
             # Update Regularization
             loss_reg = torch.tensor(0., requires_grad=False)
+            grad_cos = None
             dTheta = None
             grad_tloss = None
             if calc_reg:
@@ -341,9 +347,26 @@ def train(task_id, mnet, hnet, trainer_misc, logger, train_set, hparams):
                 beta = hparams.beta
                 if reg_ctrl is not None:
                     beta = reg_ctrl.update(task_id, loss_task.item(), loss_reg.item())
-                loss_reg = loss_reg * beta
 
-                loss_reg.backward()
+                if grad_mode is None:
+                    loss_reg = loss_reg * beta
+                    loss_reg.backward()
+                else:
+                    # "norm" sets the regulariser's weight from the gradient
+                    # norms, so beta only applies in "project".
+                    if grad_mode == "project":
+                        loss_reg = loss_reg * beta
+                    g_task = grad_combine.flat_grads(regularized_params)
+                    g_reg = torch.autograd.grad(loss_reg, regularized_params,
+                                                allow_unused=True)
+                    g_reg = torch.cat([(g if g is not None else torch.zeros_like(p)).reshape(-1)
+                                       for g, p in zip(g_reg, regularized_params)])
+                    g, grad_cos, scale = grad_combine.combine(
+                        g_task, g_reg, grad_mode, beta=hparams.reg_grad_beta)
+                    grad_combine.write_grads(regularized_params, g)
+                    if grad_mode == "norm":
+                        beta = scale   # effective weight, for the logs
+                        loss_reg = loss_reg.detach() * scale
 
                 if grad_tloss is not None: # Debug
                     grad_full = torch.cat([d.grad.view(-1) for d in hnet.theta])
@@ -367,7 +390,7 @@ def train(task_id, mnet, hnet, trainer_misc, logger, train_set, hparams):
             theta_optimizer.step()
 
             logger.train_step(loss_task, loss_reg, dTheta, grad_tloss, weights,
-                              beta=beta if calc_reg else 0.0)
+                              beta=beta if calc_reg else 0.0, grad_cos=grad_cos)
             # Validate
             logger.validate(mll)
 
@@ -1078,7 +1101,8 @@ def hnet(env, seed=None, savepath=None, play=False, render=False, device="cpu",
          fixed_scenario=False, cf_experiment=False, no_dagger=False,
          cl_profile=False, no_hnet_reg=False, replay=False, replay_labels="expert",
          replay_frac=None, replay_n=None, reg_share=0.8, first_task_mult=1.0,
-         policy_hnet=False, policy_reg_share=0.8):
+         policy_hnet=False, policy_reg_share=0.8, reg_grad_mode=None,
+         reg_grad_beta=1.0):
     # Hyperparameters
     hparams = HP(env, seed, savepath, run_name=run_name)
     hparams.model = "hnet"
@@ -1147,6 +1171,11 @@ def hnet(env, seed=None, savepath=None, play=False, render=False, device="cpu",
     if no_hnet_reg:
         hparams.beta = 0.0   # add_hnet_hparams resets beta, so apply it again here
     hparams.reg_share_target = reg_share or None
+    hparams.reg_grad_mode = reg_grad_mode
+    hparams.reg_grad_beta = reg_grad_beta
+    if cf_experiment and reg_grad_mode:
+        hparams.cf_condition += (f"_gnorm{reg_grad_beta:g}" if reg_grad_mode == "norm"
+                                 else "_gproj")
 
     if play:
         play_model(hparams)

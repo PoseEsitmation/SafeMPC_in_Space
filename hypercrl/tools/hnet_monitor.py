@@ -11,12 +11,17 @@ class MonitorHnet(MonitorRL):
         self.loss_task = 0
         self.loss_reg = 0
         self.beta = 0
+        # cos(g_task, g_reg) with a manual reg_grad_mode: mean and conflicting share
+        self.grad_cos = []
 
-    def train_step(self, loss_task, loss_reg, dTheta, grad_tloss, weights, beta=None):
+    def train_step(self, loss_task, loss_reg, dTheta, grad_tloss, weights, beta=None,
+                   grad_cos=None):
         self.loss_task += loss_task.item()
         self.loss_reg += loss_reg.item()
         if beta is not None:
             self.beta += beta
+        if grad_cos is not None:
+            self.grad_cos.append(grad_cos)
         if (self.train_iter % self.print_train_every == 0):
             self.loss_task /= self.print_train_every
             self.loss_reg /= self.print_train_every
@@ -37,6 +42,12 @@ class MonitorHnet(MonitorRL):
             self.writer.add_scalar('train/reg_share', share, i)
             self.writer.add_scalar('train/beta', self.beta, i)
             self.beta = 0
+            if self.grad_cos:
+                n = len(self.grad_cos)
+                self.writer.add_scalar('train/task_reg_grad_cos', sum(self.grad_cos) / n, i)
+                self.writer.add_scalar('train/task_reg_grad_conflict',
+                                       sum(c < 0 for c in self.grad_cos) / n, i)
+                self.grad_cos = []
             if dTheta is not None:
                 dT_norm = torch.norm(torch.cat([d.view(-1) for d in dTheta]), 2)
                 self.writer.add_scalar('train/delta_theta_norm', dT_norm, i)

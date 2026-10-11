@@ -50,6 +50,11 @@ class Hparams():
         # above is then only the starting value.
         hparams.reg_share_target = 0.8
         hparams.reg_beta_max = 1e3
+        # Combine task and regulariser gradients by hand (tools/grad_combine.py):
+        # None = summed backward passes, "norm" = ||g_reg|| = reg_grad_beta *
+        # ||g_task||, "project" = drop g_task's component against g_reg.
+        hparams.reg_grad_mode = None
+        hparams.reg_grad_beta = 1.0
 
         hparams.no_look_ahead = False  # False=use two step optimization
         hparams.plastic_prev_tembs = False  # Allow adaptation of past task embeddings
