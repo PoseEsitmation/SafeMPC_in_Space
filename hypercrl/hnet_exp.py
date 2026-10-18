@@ -381,10 +381,12 @@ def train(task_id, mnet, hnet, trainer_misc, logger, train_set, hparams):
                             hparams.use_sgd_change, lr=hparams.lr_hyper,
                             detach_dt=not hparams.backprop_dt)
                     dT_vec = torch.cat([d.view(-1).clone() for d in dTheta])
-                    grad_cos = torch.nn.functional.cosine_similarity(grad_diff.view(1,-1),
+                    # Not grad_cos: that name holds cos(g_task, g_reg) for the
+                    # reg_grad_mode logs and would be overwritten here.
+                    dtheta_cos = torch.nn.functional.cosine_similarity(grad_diff.view(1,-1),
                                                 dT_vec.view(1,-1))
 
-                    grad_tloss = (grad_tloss, grad_full, grad_diff_norm, grad_cos)
+                    grad_tloss = (grad_tloss, grad_full, grad_diff_norm, dtheta_cos)
 
             torch.nn.utils.clip_grad_norm_(regularized_params, hparams.grad_max_norm)
             theta_optimizer.step()
