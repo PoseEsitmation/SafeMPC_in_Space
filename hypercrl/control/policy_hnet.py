@@ -143,7 +143,8 @@ class HnetPolicyTrainer(PolicyTrainer):
         self.policy = policy
         self.n_tasks = policy.n_tasks
         self.optimizer = None                     # per task, see begin_task
-        self.lr = getattr(hparams, "policy_lr", 1e-4)
+        self.lr = (getattr(hparams, "policy_hnet_lr", None)
+                   or getattr(hparams, "policy_lr", 1e-4))
         self.reg_share = getattr(hparams, "policy_reg_share", 0.8)
         self.reg_beta_init = getattr(hparams, "policy_hnet_beta", 0.05)
         self.reg_ctrl = None

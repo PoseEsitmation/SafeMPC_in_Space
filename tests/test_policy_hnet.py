@@ -65,6 +65,15 @@ def test_regulariser_protects_old_task_weights():
     assert protected < 0.5 * unprotected
 
 
+def test_policy_hnet_lr_overrides_policy_lr():
+    hp = SimpleNamespace(device="cpu", policy_train_iters=2, policy_bs=8,
+                         policy_lr=1e-4, policy_hnet_lr=1e-3)
+    policy = HnetPolicy(STATE_DIM, ACT_DIM, n_tasks=1, hidden_dims=(16,), hnet_arch=(8,))
+    t = HnetPolicyTrainer(policy, hp)
+    t.begin_task(0)
+    assert t.optimizer.param_groups[0]["lr"] == 1e-3
+
+
 def test_plain_trainer_is_untouched_by_hnet_module():
     # Importing the hypernetwork student must not change PolicyNet/PolicyTrainer.
     from hypercrl.control.policy_net import PolicyNet, PolicyTrainer

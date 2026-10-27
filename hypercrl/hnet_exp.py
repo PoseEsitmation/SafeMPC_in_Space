@@ -1104,7 +1104,7 @@ def hnet(env, seed=None, savepath=None, play=False, render=False, device="cpu",
          cl_profile=False, no_hnet_reg=False, replay=False, replay_labels="expert",
          replay_frac=None, replay_n=None, reg_share=0.8, first_task_mult=1.0,
          policy_hnet=False, policy_reg_share=0.8, reg_grad_mode=None,
-         reg_grad_beta=1.0):
+         reg_grad_beta=1.0, policy_hnet_lr=None):
     # Hyperparameters
     hparams = HP(env, seed, savepath, run_name=run_name)
     hparams.model = "hnet"
@@ -1132,6 +1132,8 @@ def hnet(env, seed=None, savepath=None, play=False, render=False, device="cpu",
     hparams.first_task_mult = first_task_mult
     hparams.policy_hnet = policy_hnet
     hparams.policy_reg_share = policy_reg_share or None
+    if policy_hnet_lr is not None:
+        hparams.policy_hnet_lr = policy_hnet_lr
     if no_hnet_reg:
         hparams.beta = 0.0   # same network, continual-learning regulariser off
     if cf_experiment:

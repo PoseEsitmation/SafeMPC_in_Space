@@ -171,6 +171,9 @@ def default_arg_policy(hparams):
     hparams.policy_hnet_te_dim = 10
     hparams.policy_reg_share = 0.8
     hparams.policy_hnet_beta = 0.05
+    # Adam lr of the student hypernetwork (None = policy_lr).  At 1e-4 it
+    # underfits task 0: BC loss 2-5x the plain student's in cl_c7/cl_c8.
+    hparams.policy_hnet_lr = None
     hparams.policy_replay_n = 512
     # Stored-label replay needs no planner calls, so it can afford every
     # MPC-phase state (None = all).  The expert's per-state labels are mostly

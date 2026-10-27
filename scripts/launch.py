@@ -8,6 +8,7 @@
     python scripts/launch.py --profile fast           # shortened runs (~1/3 the time)
     python scripts/launch.py --env spaceEnv_conflict --first-task-mult 2   # conflicting faults
     python scripts/launch.py --arms hnet gnorm gproj --grad-betas 0.5 1 2 5  # gradient weighting
+    python scripts/launch.py --arms phnet --phnet-lrs 3e-4 1e-3  # student hnet learning rate
 
 Keep it alive on a server:
     nohup python scripts/launch.py --seeds 0 1 2 > launch.log 2>&1 &
@@ -51,6 +52,9 @@ ap.add_argument("--reg-share", type=float, default=0.8,
                 help="hnet regulariser's target share of the total loss (0 = fixed beta)")
 ap.add_argument("--grad-betas", nargs="+", type=float, default=[0.5, 1, 2, 5],
                 help="gnorm arm: ||g_reg|| / ||g_task|| values to sweep (one run each)")
+ap.add_argument("--phnet-lrs", nargs="+", type=float, default=None,
+                help="phnet arms: student hypernetwork learning rates to sweep "
+                     "(one run each; default: policy_lr)")
 ap.add_argument("--first-task-mult", type=float, default=1.0,
                 help="run task 0 this many times longer")
 ap.add_argument("--wait-for-idle", action="store_true",
@@ -75,6 +79,9 @@ variants = []
 for arm in args.arms:
     if arm == "gnorm":
         variants += [(f"gnorm{b:g}", arm, ["--reg-grad-beta", f"{b:g}"]) for b in args.grad_betas]
+    elif arm.startswith("phnet") and args.phnet_lrs:
+        variants += [(f"{arm}_lr{lr:g}", arm, ["--policy-hnet-lr", f"{lr:g}"])
+                     for lr in args.phnet_lrs]
     else:
         variants.append((arm, arm, []))
 jobs = [(v, seed) for seed in args.seeds for v in variants]
