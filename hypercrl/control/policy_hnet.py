@@ -16,6 +16,17 @@ unchanged; HnetPolicyTrainer only subclasses PolicyTrainer:
     beta * reg there;
   * the wrapper never sees the per-step task loss, so beta is set from the mean
     task loss of the previous training phase (the value train() returns).
+
+Regulariser strength is chosen by ``policy_reg_mode``:
+  * ``"fixed"``   (default) beta = policy_hnet_beta, constant.  This is what the
+    cl_grad sweep settled on for the dynamics hypernetwork.
+  * ``"share"``   the adaptive RegShareBeta controller.  Kept so old runs can be
+    reproduced, but see its saturation warning: with the student, theta starts on
+    the old targets, R is ~1e-5, the controller asks for beta ~2e5 and sits on the
+    beta_max clamp for the whole run.  Every cl_c7/c8/c9 phnet run was in this
+    state, which pinned theta and left only the task embedding free to move.
+  * ``"off"``     no protection (the phnet_unprot ablation); also what
+    ``--policy-reg-share 0`` selects, whatever the mode.
 """
 from __future__ import annotations
 
@@ -100,6 +111,19 @@ class HnetPolicy(nn.Module):
         return self._mlp(x, self.hnet.forward(task_id=int(task_id)))
 
 
+class _FixedBeta:
+    """Constant regulariser weight, with RegShareBeta's interface."""
+
+    def __init__(self, beta: float) -> None:
+        self.beta = beta
+
+    def reset(self, task_id) -> None:
+        pass
+
+    def update(self, task_id, loss_task, reg_raw) -> float:
+        return self.beta
+
+
 class _RegularisedStep:
     """Optimiser wrapper: adds the hypernetwork output regulariser at step().
 
@@ -131,9 +155,10 @@ class _RegularisedStep:
 class HnetPolicyTrainer(PolicyTrainer):
     """PolicyTrainer for an HnetPolicy, adding the forgetting protection.
 
-    Call begin_task(task_id) at the start of every task.  reg_share is the
-    regulariser's target share of the student's loss (default 0.8, like the
-    dynamics model); None turns the protection off (ablation).
+    Call begin_task(task_id) at the start of every task.  How beta is chosen is
+    set by ``policy_reg_mode`` (fixed / share / off) — see the module docstring.
+    ``policy_reg_share`` of 0 or None still means "no protection", so the
+    existing phnet_unprot arm is unchanged.
     """
 
     def __init__(self, policy: HnetPolicy, hparams, cbf_fn=None, clf_fn=None) -> None:
@@ -145,7 +170,14 @@ class HnetPolicyTrainer(PolicyTrainer):
         self.optimizer = None                     # per task, see begin_task
         self.lr = (getattr(hparams, "policy_hnet_lr", None)
                    or getattr(hparams, "policy_lr", 1e-4))
-        self.reg_share = getattr(hparams, "policy_reg_share", 0.8)
+        share = getattr(hparams, "policy_reg_share", 0.8)
+        mode = getattr(hparams, "policy_reg_mode", None) or "fixed"
+        if not share:        # --policy-reg-share 0 keeps meaning "no protection"
+            mode = "off"
+        if mode not in ("fixed", "share", "off"):
+            raise ValueError(f"policy_reg_mode must be fixed/share/off, got {mode!r}")
+        self.reg_mode = mode
+        self.reg_share = share
         self.reg_beta_init = getattr(hparams, "policy_hnet_beta", 0.05)
         self.reg_ctrl = None
         self._targets = None
@@ -168,8 +200,13 @@ class HnetPolicyTrainer(PolicyTrainer):
         self.policy.add_task(task_id)
         self.optimizer = _RegularisedStep(
             self, torch.optim.Adam(list(hnet.theta) + [hnet.get_task_emb(task_id)], lr=self.lr))
-        self.reg_ctrl = (RegShareBeta(self.reg_share, self.reg_beta_init)
-                         if task_id > 0 and self.reg_share else None)
+        if task_id == 0 or self.reg_mode == "off":
+            self.reg_ctrl = None
+        elif self.reg_mode == "share":
+            self.reg_ctrl = RegShareBeta(self.reg_share, self.reg_beta_init,
+                                         name="policy hnet")
+        else:
+            self.reg_ctrl = _FixedBeta(self.reg_beta_init)
 
     def train(self, dataset, writer=None, sample_weights=None, task_id=0) -> float:
         if self.optimizer is None:

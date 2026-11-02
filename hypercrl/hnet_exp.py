@@ -1104,7 +1104,7 @@ def hnet(env, seed=None, savepath=None, play=False, render=False, device="cpu",
          cl_profile=False, no_hnet_reg=False, replay=False, replay_labels="expert",
          replay_frac=None, replay_n=None, reg_share=0.8, first_task_mult=1.0,
          policy_hnet=False, policy_reg_share=0.8, reg_grad_mode=None,
-         reg_grad_beta=1.0, policy_hnet_lr=None):
+         reg_grad_beta=1.0, policy_hnet_lr=None, policy_reg_mode="fixed"):
     # Hyperparameters
     hparams = HP(env, seed, savepath, run_name=run_name)
     hparams.model = "hnet"
@@ -1132,6 +1132,8 @@ def hnet(env, seed=None, savepath=None, play=False, render=False, device="cpu",
     hparams.first_task_mult = first_task_mult
     hparams.policy_hnet = policy_hnet
     hparams.policy_reg_share = policy_reg_share or None
+    # One source of truth for the arm: share=0 means "off" whatever the mode asked for.
+    hparams.policy_reg_mode = policy_reg_mode if hparams.policy_reg_share else "off"
     if policy_hnet_lr is not None:
         hparams.policy_hnet_lr = policy_hnet_lr
     if no_hnet_reg:
@@ -1142,7 +1144,9 @@ def hnet(env, seed=None, savepath=None, play=False, render=False, device="cpu",
         if no_hnet_reg:                      # so the analysis can separate the arms
             hparams.cf_condition += "_noreg"
         if policy_hnet:
-            hparams.cf_condition += "_phnet" if policy_reg_share else "_phnet_unprot"
+            hparams.cf_condition += {"fixed": "_phnet_fixed",
+                                     "share": "_phnet_share",
+                                     "off": "_phnet_unprot"}[hparams.policy_reg_mode]
         if replay:
             hparams.cf_condition += "_replay"
             if replay_labels == "stored":

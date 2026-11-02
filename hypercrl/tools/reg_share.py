@@ -11,11 +11,18 @@ follows the trend rather than batch noise, and beta is clamped because R starts
 near zero at the beginning of every task (theta still equals the targets).
 """
 
+import logging
+
 
 class RegShareBeta:
-    def __init__(self, share, beta_init, beta_min=1e-4, beta_max=1e3, decay=0.99):
+    def __init__(self, share, beta_init, beta_min=1e-4, beta_max=1e3, decay=0.99,
+                 name="hnet", warn_after=50):
         assert 0.0 < share < 1.0, "reg_share_target must be in (0, 1)"
         self.share = share
+        self.name = name
+        self.warn_after = warn_after
+        self.n_clamped = 0
+        self._warned = False
         self.beta_init = beta_init
         self.beta_min = beta_min
         self.beta_max = beta_max
@@ -44,4 +51,20 @@ class RegShareBeta:
         if self._L > 0 and self._R > 0:
             beta = self.share / (1.0 - self.share) * self._L / self._R
             self.beta = min(max(beta, self.beta_min), self.beta_max)
+            self._check_clamp(beta)
         return self.beta
+
+    def _check_clamp(self, wanted):
+
+        if wanted <= self.beta_max:
+            self.n_clamped = 0
+            return
+        self.n_clamped += 1
+        if self._warned or self.n_clamped < self.warn_after:
+            return
+        self._warned = True
+        logging.getLogger(__name__).warning(
+            "RegShareBeta(%s): beta clamped at beta_max=%g for %d consecutive updates ",
+            "(target share %.2f wants beta~%.3g; realised share %.1f%%).",
+            self.name, self.beta_max, self.n_clamped, self.share, wanted,
+            100.0 * self.beta * self._R / max(self._L + self.beta * self._R, 1e-12))
