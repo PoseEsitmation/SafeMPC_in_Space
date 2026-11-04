@@ -454,7 +454,7 @@ class PolicyTrainer:
                                 drop_last=True)
         it = iter(loader)
 
-        self.policy.train()
+        self.policy.train(task_id = task_id)
         total = 0.0
         u_pred_norm_max   = 0.0
         u_target_norm_max = 0.0
