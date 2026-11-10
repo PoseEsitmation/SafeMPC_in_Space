@@ -18,6 +18,7 @@ Writes:
 """
 import argparse
 import glob
+import json
 import os
 import re
 
@@ -36,6 +37,18 @@ ARMS = {
     "noreg_replay":       ("noreg_replay",      "#eda100"),
     "hnet_replay_stored": ("hnet_replay_stored", "#e87ba4"),
 }
+# Any other arm (phnet_*, gnorm*, gproj, ...) takes the next of these, in the
+# order run_frames meets it.
+EXTRA_COLORS = ["#9b59b6", "#17becf", "#8c564b", "#7f7f7f", "#d62728", "#bcbd22"]
+
+
+def register_arm(arm):
+    if arm not in ARMS:
+        n_extra = sum(1 for a in ARMS if a not in KNOWN_ARMS)
+        ARMS[arm] = (arm, EXTRA_COLORS[n_extra % len(EXTRA_COLORS)])
+
+
+KNOWN_ARMS = tuple(ARMS)
 INK, INK2, GRID, SURF = "#15233F", "#52514e", "#e4e2dc", "#fffffe"
 
 plt.rcParams.update({
@@ -77,24 +90,38 @@ def run_frames(root):
     rows = []
     for d in sorted(glob.glob(os.path.join(root, "cl_*_s[0-9]*"))):
         m = re.match(r"cl_(.+)_s(\d+)$", os.path.basename(d))
-        if not m or m.group(1) not in ARMS:
+        if not m or not os.path.isdir(d):
             continue
         s = load(d)
-        n = 1 + max(int(t.split("/")[1].split("_")[1]) for t in s if t.startswith("eval_env/task_"))
-        # env-step boundaries: where each task's training-env scalars start
-        env_b = [0] + [first_step(s, f"train_env/task_{j}/attitude_error_deg") - 1
-                       for j in range(1, n)]
-        env_end = s[f"train_env/task_{n-1}/attitude_error_deg"].index.max()
-        env_b.append(env_end)
-        # dynamics batches: task j's validation loss appears soon after its start
-        tr_end = s["train/loss"].index.max() + 1
-        tr_b = [0] + [round(env_b[j] / env_end * tr_end) for j in range(1, n)] + [tr_end]
-        # policy steps: first DAgger eval of each task
-        po_b = [0] + [first_step(s, f"dagger_eval_filtered/task_{j}/reward")
-                      for j in range(1, n)]
-        po_b.append(s[f"dagger_eval_filtered/task_{n-1}/reward"].index.max())
+        try:
+            n = 1 + max(int(t.split("/")[1].split("_")[1]) for t in s
+                        if t.startswith("eval_env/task_"))
+            # env-step boundaries: where each task's training-env scalars start
+            env_b = [0] + [first_step(s, f"train_env/task_{j}/attitude_error_deg") - 1
+                           for j in range(1, n)]
+            env_end = s[f"train_env/task_{n-1}/attitude_error_deg"].index.max()
+            env_b.append(env_end)
+            # dynamics batches: task j's validation loss appears soon after its start
+            tr_end = s["train/loss"].index.max() + 1
+            tr_b = [0] + [round(env_b[j] / env_end * tr_end) for j in range(1, n)] + [tr_end]
+            # policy steps: first DAgger eval of each task
+            po_b = [0] + [first_step(s, f"dagger_eval_filtered/task_{j}/reward")
+                          for j in range(1, n)]
+            po_b.append(s[f"dagger_eval_filtered/task_{n-1}/reward"].index.max())
+        except (KeyError, TypeError, ValueError) as e:
+            print(f"skipped {os.path.basename(d)}: incomplete logs ({e!r})")
+            continue
+        try:
+            with open(os.path.join(d, "tasks.json")) as fh:
+                names = [t["params"]["name"].replace("_", " ") for t in json.load(fh)]
+        except (OSError, KeyError, ValueError):
+            names = []
+        register_arm(m.group(1))
         rows.append(dict(arm=m.group(1), seed=int(m.group(2)), s=s, n=n, env_b=env_b,
-                         tr=mapper(tr_b, env_b), po=mapper(po_b, env_b), env=lambda x: x))
+                         names=names, tr=mapper(tr_b, env_b), po=mapper(po_b, env_b),
+                         env=lambda x: x))
+    if not rows:
+        raise SystemExit(f"no complete cl_<arm>_s<seed> runs under {root}")
     return rows
 
 
@@ -129,7 +156,7 @@ def by_arm(rows):
     out = {}
     for r in rows:
         out.setdefault(r["arm"], []).append(r)
-    return [(a, out[a]) for a in ARMS if a in out]
+    return [(a, out[a]) for a in ARMS if a in out]   # known arms first, then the rest
 
 
 def legend(fig, arms):
@@ -176,8 +203,8 @@ def per_task_panels(rows, out, fname, tag_fmt, xmap, title_fmt, ylabel, smooth=1
     ref = rows[0]
     n = ref["n"]
     fig, axes = plt.subplots(1, n, figsize=(18, 6.2), sharex=True, sharey=True)
-    names = ["nominal", "roll reversed", "roll ↔ yaw swapped"]
-    for j, ax in enumerate(axes):
+    names = ref["names"]           # from the run's tasks.json
+    for j, ax in enumerate(np.atleast_1d(axes)):
         curves = []
         for a, rs in arms:
             c = mean_curve(rs, tag_fmt.format(j), xmap, smooth=smooth)
@@ -191,7 +218,7 @@ def per_task_panels(rows, out, fname, tag_fmt, xmap, title_fmt, ylabel, smooth=1
         ax.set_title(title_fmt.format(j=j, name=names[j] if j < len(names) else ""), pad=26)
         decorate(ax, ref["env_b"], n)
         ax.set_xlabel("training time (MPC environment steps)")
-    axes[0].set_ylabel(ylabel)
+    np.atleast_1d(axes)[0].set_ylabel(ylabel)
     legend(fig, arms)
     fig.tight_layout(rect=(0, 0.07, 1, 1))
     fig.savefig(os.path.join(out, fname), dpi=110)
@@ -199,11 +226,14 @@ def per_task_panels(rows, out, fname, tag_fmt, xmap, title_fmt, ylabel, smooth=1
 
 
 def forgetting_points(root):
-    files = glob.glob(os.path.join(root, "*", "forgetting_matrix.csv"))
-    df = pd.concat([pd.read_csv(f) for f in files])
-    df["arm"] = df.condition.str.replace("^dagger_?", "", regex=True)
-    df["arm"] = df.arm.replace({"": "hnet", "replay": "hnet_replay",
-                                "replay_stored": "hnet_replay_stored"})
+    parts = []
+    for f in glob.glob(os.path.join(root, "*", "forgetting_matrix.csv")):
+        # Arm from the run folder, matching run_frames (the condition column
+        # doesn't separate e.g. cl_c9's two phnet learning rates).
+        m = re.match(r"cl_(.+)_s\d+$", os.path.basename(os.path.dirname(f)))
+        if m:
+            parts.append(pd.read_csv(f).assign(arm=m.group(1)))
+    df = pd.concat(parts)
     return df[df["filter"] == "filtered"].groupby(["arm", "after_task", "eval_task"]).reward.mean()
 
 

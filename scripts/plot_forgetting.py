@@ -6,6 +6,7 @@
 import argparse
 import glob
 import os
+import re
 
 import matplotlib
 matplotlib.use("Agg")
@@ -13,7 +14,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#9b59b6", "#7f7f7f"]
+# One per arm on the retention plot; zip() silently drops arms beyond this list.
+COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#9b59b6", "#7f7f7f",
+          "#e87ba4", "#eda100", "#17becf", "#8c564b", "#d62728"]
 METRICS = [("koz_mean", "Reds", ".1f"), ("att_err_mean_deg", "Purples", ".0f"), ("reward", "viridis", ".0f")]
 
 
@@ -21,7 +24,16 @@ def load(root):
     files = sorted(glob.glob(os.path.join(root, "**", "forgetting_matrix.csv"), recursive=True))
     if not files:
         raise SystemExit(f"no forgetting_matrix.csv under {root}")
-    df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
+    parts = []
+    for f in files:
+        d = pd.read_csv(f)
+        # Label by the run folder's arm (cl_<arm>_s<seed>): the condition column
+        # doesn't encode every swept setting (cl_c9's two phnet lrs share one).
+        m = re.match(r"cl_(.+)_s\d+$", os.path.basename(os.path.dirname(f)))
+        if m:
+            d["condition"] = m.group(1)
+        parts.append(d)
+    df = pd.concat(parts, ignore_index=True)
     if "env" in df and df.env.nunique() > 1:  # keep task families apart
         df["condition"] = df.env + "/" + df.condition
     print(df.groupby("condition").seed.unique().to_string())
