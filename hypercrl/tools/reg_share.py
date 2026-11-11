@@ -64,7 +64,7 @@ class RegShareBeta:
             return
         self._warned = True
         logging.getLogger(__name__).warning(
-            "RegShareBeta(%s): beta clamped at beta_max=%g for %d consecutive updates ",
+            "RegShareBeta(%s): beta clamped at beta_max=%g for %d consecutive updates "
             "(target share %.2f wants beta~%.3g; realised share %.1f%%).",
             self.name, self.beta_max, self.n_clamped, self.share, wanted,
             100.0 * self.beta * self._R / max(self._L + self.beta * self._R, 1e-12))
