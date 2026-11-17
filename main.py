@@ -68,6 +68,7 @@ def run_hnet(args):
         policy_reg_share=getattr(args, 'policy_reg_share', 0.8),
         policy_reg_mode=getattr(args, 'policy_reg_mode', 'fixed'),
         policy_hnet_lr=getattr(args, 'policy_hnet_lr', None),
+        policy_hnet_beta=getattr(args, 'policy_hnet_beta', None),
         reg_grad_mode=getattr(args, 'reg_grad_mode', None),
         reg_grad_beta=getattr(args, 'reg_grad_beta', 1.0),
     )
@@ -258,6 +259,8 @@ def main():
     run_parser.add_argument("--policy-reg-mode", choices=["fixed", "share", "off"], default="fixed",
                              dest="policy_reg_mode",
                              help="With --policy-hnet: how the student regulariser is weighted. fixed = constant --policy-hnet-beta (default); share = adapt beta to --policy-reg-share (saturated beta_max in every cl_c7/c8/c9 run); off = no protection")
+    run_parser.add_argument("--policy-hnet-beta", type=float, default=None, dest="policy_hnet_beta",
+                             help="With --policy-hnet --policy-reg-mode fixed: constant weight on the student's output regulariser (default 0.05). 0.05 learns new tasks but forgets task 0 completely (cl_c11); the saturated share controller sat near 1000 and froze the student instead (cl_c9)")
     run_parser.add_argument("--policy-hnet-lr", type=float, default=None, dest="policy_hnet_lr",
                              help="With --policy-hnet: Adam lr of the student hypernetwork (default: policy_lr, 1e-4)")
     run_parser.add_argument("--reg-grad-mode", choices=["norm", "project"], default=None, dest="reg_grad_mode",

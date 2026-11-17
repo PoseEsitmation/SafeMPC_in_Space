@@ -166,3 +166,20 @@ def test_plain_trainer_is_untouched_by_hnet_module():
     t = PolicyTrainer(PolicyNet(STATE_DIM, ACT_DIM), hp)
     assert isinstance(t.optimizer, torch.optim.AdamW)
     assert not hasattr(t, "begin_task")
+
+
+def test_policy_hnet_beta_flag_reaches_the_trainer():
+    """--policy-hnet-beta must override default_arg's 0.05 (the cl_c12 sweep).
+
+    cl_c11 showed 0.05 learns every task but forgets task 0 completely, so the
+    sweep's whole point is that this value changes per run.
+    """
+    import inspect, hypercrl.hnet_exp as H
+    assert "policy_hnet_beta" in inspect.signature(H.hnet).parameters
+
+    for b in (1.0, 10.0, 100.0):
+        t = _trainer(beta=b)
+        t.begin_task(0)          # registers task 0's embedding; no regulariser yet
+        t.begin_task(1)
+        assert t.reg_ctrl.beta == b
+        assert t.reg_ctrl.update(1, 123.0, 1e-9) == b

@@ -9,6 +9,7 @@
     python scripts/launch.py --env spaceEnv_conflict --first-task-mult 2   # conflicting faults
     python scripts/launch.py --arms hnet gnorm gproj --grad-betas 0.5 1 2 5  # gradient weighting
     python scripts/launch.py --arms phnet --phnet-lrs 3e-4 1e-3  # student hnet learning rate
+    python scripts/launch.py --arms phnet --phnet-betas 1 10 100  # student regulariser strength
 
 Keep it alive on a server:
     nohup python scripts/launch.py --seeds 0 1 2 > launch.log 2>&1 &
@@ -56,6 +57,11 @@ ap.add_argument("--grad-betas", nargs="+", type=float, default=[0.5, 1, 2, 5],
 ap.add_argument("--phnet-lrs", nargs="+", type=float, default=None,
                 help="phnet arms: student hypernetwork learning rates to sweep "
                      "(one run each; default: policy_lr)")
+ap.add_argument("--phnet-betas", nargs="+", type=float, default=None,
+                help="phnet arms: constant student-regulariser weights to sweep, one run "
+                     "per (lr, beta). 0.05 (the default) learns every task but forgets "
+                     "task 0 completely; the old share controller sat near 1000 and froze "
+                     "the student. The useful range is in between")
 ap.add_argument("--first-task-mult", type=float, default=1.0,
                 help="run task 0 this many times longer")
 ap.add_argument("--wait-for-idle", action="store_true",
@@ -80,9 +86,16 @@ variants = []
 for arm in args.arms:
     if arm == "gnorm":
         variants += [(f"gnorm{b:g}", arm, ["--reg-grad-beta", f"{b:g}"]) for b in args.grad_betas]
-    elif arm.startswith("phnet") and args.phnet_lrs:
-        variants += [(f"{arm}_lr{lr:g}", arm, ["--policy-hnet-lr", f"{lr:g}"])
-                     for lr in args.phnet_lrs]
+    elif arm.startswith("phnet") and (args.phnet_lrs or args.phnet_betas):
+        # One run per (lr, beta); either axis may be left at its default.
+        for lr, b in itertools.product(args.phnet_lrs or [None],
+                                       args.phnet_betas or [None]):
+            label, extra = arm, []
+            if lr is not None:
+                label += f"_lr{lr:g}"; extra += ["--policy-hnet-lr", f"{lr:g}"]
+            if b is not None:
+                label += f"_b{b:g}";   extra += ["--policy-hnet-beta", f"{b:g}"]
+            variants.append((label, arm, extra))
     else:
         variants.append((arm, arm, []))
 jobs = [(v, seed) for seed in args.seeds for v in variants]
